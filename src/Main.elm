@@ -1,14 +1,16 @@
 module Main exposing (main)
 
+import Angle
 import Audio
+import Axis2d exposing (Axis2d)
 import Browser
 import Browser.Dom
 import Browser.Events
 import Bytes
-import Bytes.Parser
+import Circle2d exposing (Circle2d)
 import Color exposing (Color)
 import Direction2d exposing (Direction2d)
-import Duration exposing (Duration)
+import Duration exposing (Duration, Seconds)
 import Element as Ui
 import Element.Background as UiBackground
 import Element.Border as UiBorder
@@ -16,28 +18,39 @@ import Element.Font as UiFont
 import Element.Input as UiInput
 import File
 import File.Select
+import Forest.Path
 import Frame2d exposing (Frame2d)
 import Html exposing (Html)
+import Html.Events
 import Json.Decode
 import Key
 import LineSegment2d exposing (LineSegment2d)
-import Midi
+import List.Extra
 import Physics
 import Pixels exposing (Pixels)
 import PkgPorts
 import Point2d exposing (Point2d)
-import Quantity exposing (Quantity)
+import Quantity exposing (Quantity, Rate)
+import Random
+import Random.Extra
 import Reaction exposing (Reaction)
 import RecordWithoutConstructorFunction exposing (RecordWithoutConstructorFunction)
+import Svg as UntypedSvg
+import Svg.Lazy
 import Task
 import Time
+import Tree exposing (Tree)
+import Tree.Navigate
+import Tree.Path exposing (TreePath)
 import TypedSvg as Svg
 import TypedSvg.Attributes as SvgA
 import TypedSvg.Core exposing (Svg)
+import TypedSvg.Events
 import TypedSvg.Filters
 import TypedSvg.Filters.Attributes
 import TypedSvg.Types as Svg
 import Vector2d exposing (Vector2d)
+import VirtualDom
 
 
 type SpecificOrShared specific shared
@@ -62,7 +75,7 @@ type alias Event =
 
 
 type EventShared
-    = AudioLoaded { piece : AudioPiece, result : Result Audio.LoadError Audio.Source }
+    = AudioLoaded { piece : AudioKind, result : Result Audio.LoadError Audio.Source }
 
 
 type alias EventSpecific =
@@ -74,7 +87,12 @@ type MenuEvent
 
 
 type GameEvent
-    = GameWindowSized { width : Float, height : Float }
+    = PlantBlossomPressed TreePath
+    | MouseMoved { clientX : Float, clientY : Float }
+    | MouseReleased
+    | FreeBlossomPressed Int
+    | GameWindowSized { width : Float, height : Float }
+    | InitialRandomSeedReceived Random.Seed
     | InitialTimeReceived Time.Posix
     | FrameTickPassed Time.Posix
     | KeyPressed Key.Key
@@ -87,7 +105,8 @@ type alias State =
 
 type alias StateShared =
     RecordWithoutConstructorFunction
-        { audioCollideStone : Result Audio.LoadError Audio.Source }
+        { audio : EachAudio (Result Audio.LoadError Audio.Source)
+        }
 
 
 type alias StateSpecific =
@@ -99,38 +118,46 @@ type alias MenuState =
         {}
 
 
-type alias EditorState =
-    RecordWithoutConstructorFunction
-        { windowSize : { width : Float, height : Float }
-        , world : Physics.World BodyWhat
-        , camera : Frame2d Pixels Float { defines : Float }
-        }
-
-
 type alias GameState =
     RecordWithoutConstructorFunction
         { windowSize : { width : Float, height : Float }
-        , collideStoneAudioTimes : List Time.Posix
-        , world : Physics.World BodyWhat
+        , audioTimes : EachAudio (List Time.Posix)
+        , plant : Plant
+        , blossomSnappedToMouse : Maybe FreeBlossom
+        , freeBlossoms : List FreeBlossom
+        , lightRays : List LightRay
         , camera : Frame2d Pixels Float { defines : Float }
-        , runStartTime : Time.Posix
-        , lastSimulationTime : Time.Posix
+        , scrollYSpeed : Quantity Float (Rate Pixels Seconds)
+        , highest : Quantity Float Pixels
         , keysPressed : List Key.Key
+        , randomSeed : Random.Seed
+        , lastTick : Time.Posix
         }
 
 
-type BodyWhat
-    = Player PlayerWhat
-    | Obstacle ObstacleWhat
+type alias Plant =
+    Tree PlantSegment
 
 
-type alias ObstacleWhat =
-    {}
+type alias PlantSegment =
+    { orientation : Vector2d Pixels Float
+    , blossom : Maybe Blossom
+    , color : Color
+    }
 
 
-type alias PlayerWhat =
-    RecordWithoutConstructorFunction
-        { locationTrail : List (Point2d Pixels Float) }
+type alias Blossom =
+    { color : Color }
+
+
+type alias FreeBlossom =
+    { point : Point2d Pixels Float
+    , color : Color
+    }
+
+
+type alias LightRay =
+    { axis : HalfLine }
 
 
 type alias Effect =
@@ -142,7 +169,7 @@ type alias EffectSpecific =
 
 
 type EffectShared
-    = LoadAudio AudioPiece
+    = LoadAudio AudioKind
 
 
 type MenuEffect
@@ -150,12 +177,9 @@ type MenuEffect
 
 
 type GameEffect
-    = RequestInitialTime
+    = RequestInitialRandomSeed
+    | RequestInitialTime
     | GameRequestInitialWindowSize
-
-
-type AudioPiece
-    = AudioCollideStone
 
 
 main : Program () (Audio.Model Event State) (Audio.Msg Event)
@@ -178,32 +202,43 @@ main =
         }
 
 
-obstacles : List (Physics.Body BodyWhat)
-obstacles =
-    [ Physics.rectangle (Obstacle {})
-        { width = Pixels.float 100, height = obstacleWidth }
-        |> Physics.moveTo
-            (Point2d.fromRecord Pixels.float { x = 0, y = -80 })
-    , Physics.rectangle (Obstacle {})
-        { width = Pixels.float 100, height = obstacleWidth }
-        |> Physics.moveTo
-            (Point2d.fromRecord Pixels.float { x = 200, y = -40 })
-    , Physics.polygon (Obstacle {})
-        (List.map (Point2d.fromRecord Pixels.float)
-            [ { x = -80, y = 0 }
-            , { x = 0, y = 60 }
-            , { x = 100, y = 0 }
-            , { x = 0, y = -70 }
-            ]
-        )
-        |> Physics.moveTo
-            (Point2d.fromRecord Pixels.float { x = 350, y = 0 })
-    ]
+type AudioKind
+    = AudioMirrorGrow
+    | AudioMirrorPlace
 
 
-audioPieces : List AudioPiece
-audioPieces =
-    [ AudioCollideStone ]
+audioKinds : List AudioKind
+audioKinds =
+    [ AudioMirrorGrow, AudioMirrorPlace ]
+
+
+type alias EachAudio perKind =
+    { mirrorGrow : perKind, mirrorPlace : perKind }
+
+
+eachAudio : perKind -> EachAudio perKind
+eachAudio perKind =
+    { mirrorGrow = perKind, mirrorPlace = perKind }
+
+
+alterAudioOfKind : AudioKind -> (a -> a) -> EachAudio a -> EachAudio a
+alterAudioOfKind kind f =
+    case kind of
+        AudioMirrorGrow ->
+            \r -> { r | mirrorGrow = r.mirrorGrow |> f }
+
+        AudioMirrorPlace ->
+            \r -> { r | mirrorPlace = r.mirrorPlace |> f }
+
+
+accessAudioOfKind : AudioKind -> EachAudio a -> a
+accessAudioOfKind kind =
+    case kind of
+        AudioMirrorGrow ->
+            .mirrorGrow
+
+        AudioMirrorPlace ->
+            .mirrorPlace
 
 
 init : () -> Reaction State Effect
@@ -211,12 +246,10 @@ init () =
     Reaction.to
         { specific = Menu {}
         , shared =
-            { audioCollideStone = Err Audio.UnknownError }
+            { audio = eachAudio (Err Audio.UnknownError) }
         }
         |> Reaction.effectsAdd
-            (audioPieces
-                |> List.map (\piece -> LoadAudio piece |> Shared)
-            )
+            (audioKinds |> List.map (\piece -> LoadAudio piece |> Shared))
 
 
 initGame : Reaction GameState GameEffect
@@ -225,23 +258,39 @@ initGame =
         { windowSize =
             -- dummy
             { width = 1920, height = 1080 }
-        , collideStoneAudioTimes = []
-        , world =
-            (Physics.circle (Player { locationTrail = [] }) { radius = playerRadius }
-                |> Physics.moveTo (Point2d.fromRecord Pixels.float { x = 0, y = 0 })
-                |> Physics.movable
-            )
-                :: obstacles
-        , camera = Frame2d.atOrigin
-        , runStartTime =
-            -- dummy
-            Time.millisToPosix -1
-        , lastSimulationTime =
-            -- dummy
-            Time.millisToPosix -1
+        , audioTimes = eachAudio []
+        , plant =
+            Tree.tree
+                { orientation = Vector2d.fromPixels { x = 0, y = 30 }
+                , color = Color.rgb 0.5 0.8 0
+                , blossom = Just { color = Color.rgb 0 1 1 }
+                }
+                []
+        , blossomSnappedToMouse = Nothing
+        , freeBlossoms = []
+        , lightRays =
+            [ { axis =
+                    { originPoint = Point2d.fromRecord Pixels.float { x = -2000, y = 1000 }
+                    , direction = Direction2d.fromAngle (Angle.turns -0.6)
+                    }
+              }
+            ]
+        , camera = Frame2d.atPoint (Point2d.fromRecord Pixels.float { x = 0, y = -50 })
+        , scrollYSpeed = Pixels.float 10 |> Quantity.per Duration.second
+        , highest = Pixels.float 30
         , keysPressed = []
+        , randomSeed =
+            -- dummy
+            Random.initialSeed 1635127483
+        , lastTick =
+            -- dummy
+            Time.millisToPosix -1
         }
-        |> Reaction.effectsAdd [ RequestInitialTime, GameRequestInitialWindowSize ]
+        |> Reaction.effectsAdd
+            [ RequestInitialRandomSeed
+            , RequestInitialTime
+            , GameRequestInitialWindowSize
+            ]
 
 
 withShared : shared -> specific -> { specific : specific, shared : shared }
@@ -292,20 +341,15 @@ reactToShared : EventShared -> (State -> Reaction State EffectShared)
 reactToShared eventShared =
     case eventShared of
         AudioLoaded audioLoaded ->
-            case audioLoaded.piece of
-                AudioCollideStone ->
-                    \state ->
-                        Reaction.to
-                            { state
-                                | shared =
-                                    let
-                                        shared =
-                                            state.shared
-                                    in
-                                    { shared
-                                        | audioCollideStone = audioLoaded.result
-                                    }
+            \state ->
+                Reaction.to
+                    { state
+                        | shared =
+                            { audio =
+                                state.shared.audio
+                                    |> alterAudioOfKind audioLoaded.piece (\_ -> audioLoaded.result)
                             }
+                    }
 
 
 menuReactTo : MenuEvent -> (MenuState -> Reaction StateSpecific Effect)
@@ -318,103 +362,237 @@ menuReactTo menuEvent =
 gameReactTo : GameEvent -> (GameState -> Reaction StateSpecific Effect)
 gameReactTo event =
     case event of
+        PlantBlossomPressed pathToSegmentWithBlossom ->
+            \state ->
+                Reaction.to
+                    ({ state
+                        | plant =
+                            state.plant
+                                |> Tree.Navigate.alter pathToSegmentWithBlossom
+                                    (\sub -> sub |> Tree.mapLabel (\segment -> { segment | blossom = Nothing }))
+                        , blossomSnappedToMouse =
+                            state.plant |> separateBlossomAt pathToSegmentWithBlossom
+                     }
+                        |> Game
+                    )
+
+        MouseMoved newMousePoint ->
+            \state ->
+                case state.blossomSnappedToMouse of
+                    Nothing ->
+                        Reaction.to (state |> Game)
+
+                    Just blossomSnappedToMouse ->
+                        Reaction.to
+                            ({ state
+                                | blossomSnappedToMouse =
+                                    { blossomSnappedToMouse
+                                        | point =
+                                            Point2d.fromRecord Pixels.float
+                                                { x =
+                                                    newMousePoint.clientX
+                                                        - state.windowSize.width
+                                                        / 2
+                                                        + (state.camera |> Frame2d.originPoint |> Point2d.xCoordinate |> Pixels.toFloat)
+                                                , y =
+                                                    state.windowSize.height
+                                                        - newMousePoint.clientY
+                                                        + (state.camera |> Frame2d.originPoint |> Point2d.yCoordinate |> Pixels.toFloat)
+                                                }
+                                    }
+                                        |> Just
+                             }
+                                |> Game
+                            )
+
+        MouseReleased ->
+            \state ->
+                case state.blossomSnappedToMouse of
+                    Nothing ->
+                        Reaction.to (state |> Game)
+
+                    Just blossomSnappedToMouse ->
+                        Reaction.to
+                            ({ state
+                                | blossomSnappedToMouse = Nothing
+                                , freeBlossoms = blossomSnappedToMouse :: state.freeBlossoms
+                             }
+                                |> Game
+                            )
+
+        FreeBlossomPressed freeBlossomIndex ->
+            \state ->
+                Reaction.to
+                    ({ state
+                        | blossomSnappedToMouse =
+                            state.freeBlossoms |> List.Extra.getAt freeBlossomIndex
+                        , freeBlossoms =
+                            state.freeBlossoms
+                                |> List.Extra.removeAt freeBlossomIndex
+                     }
+                        |> Game
+                    )
+
         GameWindowSized size ->
             \state -> Reaction.to ({ state | windowSize = size } |> Game)
+
+        InitialRandomSeedReceived initialRandomSeed ->
+            \state ->
+                Reaction.to
+                    ({ state | randomSeed = initialRandomSeed }
+                        |> Game
+                    )
 
         InitialTimeReceived initialTime ->
             \state ->
                 Reaction.to
-                    ({ state
-                        | runStartTime = initialTime
-                        , lastSimulationTime = initialTime
-                     }
+                    ({ state | lastTick = initialTime }
                         |> Game
                     )
 
         FrameTickPassed newSimulationTime ->
             \state ->
                 let
-                    sinceLastSimulation : Duration
-                    sinceLastSimulation =
-                        Duration.from state.lastSimulationTime newSimulationTime
+                    sinceLastTick =
+                        Duration.from state.lastTick newSimulationTime
 
-                    -- |> Vector2d.scaleBy 0.94
-                    updatedWorld : Physics.World BodyWhat
-                    updatedWorld =
-                        state.world
-                            |> Physics.worldBodyAlter
-                                (\body ->
-                                    case body.what of
-                                        Player playerWhat ->
-                                            body
-                                                |> Physics.speedAlter
-                                                    (\speed ->
-                                                        speed
-                                                            |> (if List.member Key.ArrowLeft state.keysPressed then
-                                                                    Vector2d.plus (Vector2d.fromRecord Pixels.pixelsPerSecond { x = -25, y = 0 })
+                    ( plantProgressed, newSeed ) =
+                        Random.step
+                            (Random.andThen
+                                (\shouldGrowLeaves ->
+                                    if shouldGrowLeaves then
+                                        state.plant |> plantGrowLeaf
 
-                                                                else
-                                                                    identity
-                                                               )
-                                                            |> (if List.member Key.ArrowRight state.keysPressed then
-                                                                    Vector2d.plus (Vector2d.fromRecord Pixels.pixelsPerSecond { x = 25, y = 0 })
-
-                                                                else
-                                                                    identity
-                                                               )
-                                                            |> (if List.member Key.ArrowUp state.keysPressed then
-                                                                    Vector2d.plus (Vector2d.fromRecord Pixels.pixelsPerSecond { x = 0, y = 30 })
-
-                                                                else
-                                                                    identity
-                                                               )
-                                                    )
-                                                |> Physics.whatReplace
-                                                    ({ playerWhat
-                                                        | locationTrail =
-                                                            (playerWhat.locationTrail |> List.take 5)
-                                                                |> (::) (body |> Physics.location)
-                                                     }
-                                                        |> Player
-                                                    )
-
-                                        Obstacle _ ->
-                                            body
+                                    else
+                                        state.plant |> Random.constant
                                 )
+                                (Random.weighted
+                                    ( sinceLastTick |> Duration.inSeconds, True )
+                                    [ ( 0.06, False ) ]
+                                )
+                                |> Random.andThen
+                                    (\plantGrown ->
+                                        Random.andThen
+                                            (\shouldAddBlossom ->
+                                                if shouldAddBlossom then
+                                                    plantGrown |> plantGrowBlossoms
 
-                    newSimulatedWorld =
-                        updatedWorld |> Physics.simulate sinceLastSimulation
+                                                else
+                                                    plantGrown |> Random.constant
+                                            )
+                                            (Random.weighted
+                                                ( sinceLastTick |> Duration.inSeconds, True )
+                                                [ ( 0.06, False ) ]
+                                            )
+                                    )
+                            )
+                            state.randomSeed
+
+                    plantGrowLeaf : Plant -> Random.Generator Plant
+                    plantGrowLeaf plant =
+                        -- TODO with the parent's absolute location. If hit light mostly only then add random piece
+                        Random.map
+                            (\subs ->
+                                Tree.tree (plant |> Tree.label) subs
+                            )
+                            (case plant |> Tree.children of
+                                [] ->
+                                    Random.map (\only -> [ Tree.singleton only ]) plantSegmentRandom
+
+                                [ onlySub ] ->
+                                    Random.andThen
+                                        (\shouldAddBranch ->
+                                            if shouldAddBranch then
+                                                Random.map (\new -> [ onlySub, Tree.singleton new ]) plantSegmentRandom
+
+                                            else
+                                                Random.map List.singleton (plantGrowLeaf onlySub)
+                                        )
+                                        (Random.weighted
+                                            ( 0.024 {- (1 / ((onlySub |> Tree.count |> toFloat) ^ 2)) * 0.5 -}
+                                            , True
+                                            )
+                                            [ ( 1, False ) ]
+                                        )
+
+                                sub0 :: sub1Up ->
+                                    Random.andThen
+                                        (\index ->
+                                            (sub0 :: sub1Up)
+                                                |> List.indexedMap
+                                                    (\subIndex sub ->
+                                                        if subIndex == index then
+                                                            plantGrowLeaf sub
+
+                                                        else
+                                                            sub |> Random.constant
+                                                    )
+                                                |> Random.Extra.sequence
+                                        )
+                                        (let
+                                            weighted i =
+                                                ( {- ((sub0 :: sub1Up)
+                                                       |> List.Extra.getAt i
+                                                       |> Maybe.withDefault sub0
+                                                       |> Tree.count
+                                                       |> toFloat
+                                                     )
+                                                  -}
+                                                  10
+                                                    * 2.5
+                                                , i
+                                                )
+                                         in
+                                         Random.weighted (0 |> weighted)
+                                            (List.range 1 (sub1Up |> List.length) |> List.map weighted)
+                                        )
+                            )
+
+                    plantGrowBlossoms plant =
+                        Random.map2
+                            (\blossom subs ->
+                                Tree.tree (plant |> Tree.label |> (\r -> { r | blossom = r.blossom |> onJust blossom })) subs
+                            )
+                            (Random.Extra.frequency ( 0.999, Nothing |> Random.constant )
+                                [ ( 0.00025, Random.map Just blossomRandom ) ]
+                            )
+                            ((plant |> Tree.children)
+                                |> Random.Extra.traverse plantGrowBlossoms
+                            )
+
+                    -- TODO add sounds for blossoms
+                    -- TODO move camera with arrow keys
                 in
                 Reaction.to
                     ({ state
-                        | lastSimulationTime = newSimulationTime
-                        , world = newSimulatedWorld.world
-                        , camera =
-                            newSimulatedWorld.world
-                                |> Physics.worldBody
-                                    (\what ->
-                                        case what of
-                                            Player playerWhat ->
-                                                playerWhat |> Just
+                        | plant = plantProgressed
+                        , highest =
+                            Quantity.max
+                                state.highest
+                                (plantProgressed |> plantHeight)
+                        , scrollYSpeed =
+                            state.scrollYSpeed
+                                |> (if List.member Key.ArrowUp state.keysPressed || List.member Key.W state.keysPressed then
+                                        Quantity.plus (Pixels.float 16 |> Quantity.per Duration.second)
 
-                                            _ ->
-                                                Nothing
-                                    )
-                                |> Maybe.map
-                                    (\player ->
-                                        state.camera
-                                            |> Frame2d.moveTo (player |> Physics.location)
-                                    )
-                                |> Maybe.withDefault state.camera
-                        , collideStoneAudioTimes =
-                            state.collideStoneAudioTimes
-                                |> (case newSimulatedWorld.collisionsWith of
-                                        [] ->
-                                            identity
-
-                                        _ :: _ ->
-                                            (::) newSimulationTime
+                                    else
+                                        identity
                                    )
+                                |> (if List.member Key.ArrowDown state.keysPressed || List.member Key.S state.keysPressed then
+                                        Quantity.plus (Pixels.float -16 |> Quantity.per Duration.second)
+
+                                    else
+                                        identity
+                                   )
+                                |> Quantity.multiplyBy (0.82 ^ (sinceLastTick |> Duration.inSeconds))
+                        , camera =
+                            state.camera
+                                |> Frame2d.translateBy
+                                    (Vector2d.fromRecord Pixels.float
+                                        { x = 0, y = state.scrollYSpeed |> Quantity.for sinceLastTick |> Pixels.toFloat }
+                                    )
+                        , lastTick = newSimulationTime
+                        , randomSeed = newSeed
                      }
                         |> Game
                     )
@@ -504,6 +682,9 @@ gameInterpretEffect : GameEffect -> Reaction.EffectInterpretation GameEvent
 gameInterpretEffect =
     \effect ->
         case effect of
+            RequestInitialRandomSeed ->
+                Reaction.commands [ Random.independentSeed |> Random.generate InitialRandomSeedReceived ]
+
             RequestInitialTime ->
                 Reaction.commands [ Time.now |> Task.perform InitialTimeReceived ]
 
@@ -520,18 +701,120 @@ gameInterpretEffect =
                     ]
 
 
-audioPieceToName : AudioPiece -> String
+plantHeight : Plant -> Quantity Float Pixels
+plantHeight =
+    \plant ->
+        plant
+            |> Tree.Navigate.restructure
+                (\step ->
+                    step.label.orientation
+                        |> Vector2d.yComponent
+                        |> Quantity.plus (step.children |> Quantity.maximum |> Maybe.withDefault Quantity.zero)
+                )
+
+
+separateBlossomAt : TreePath -> Plant -> Maybe { color : Color, point : Point2d Pixels Float }
+separateBlossomAt path =
+    \plant ->
+        case path |> Tree.Path.step of
+            Nothing ->
+                case plant |> Tree.label |> .blossom of
+                    Nothing ->
+                        Nothing
+
+                    Just blossom ->
+                        { point =
+                            Point2d.origin
+                                |> Point2d.translateBy (plant |> Tree.label |> .orientation |> Vector2d.scaleBy 0.5)
+                        , color = blossom.color
+                        }
+                            |> Just
+
+            Just subPath ->
+                case
+                    plant
+                        |> Tree.children
+                        |> List.Extra.getAt (subPath |> Forest.Path.treeIndex)
+                        |> Maybe.andThen (separateBlossomAt (subPath |> Forest.Path.pathIntoTreeAtIndex))
+                of
+                    Nothing ->
+                        Nothing
+
+                    Just subBlossom ->
+                        { subBlossom
+                            | point =
+                                subBlossom.point
+                                    |> Point2d.translateBy (plant |> Tree.label |> .orientation)
+                        }
+                            |> Just
+
+
+plantSegmentRandom : Random.Generator PlantSegment
+plantSegmentRandom =
+    Random.map2 (\orientation color -> { orientation = orientation, color = color, blossom = Nothing })
+        (Random.map2
+            (\length angleInTurns ->
+                Vector2d.withLength
+                    length
+                    (Direction2d.fromAngle angleInTurns)
+            )
+            (Random.map Pixels.float (Random.float 20 50))
+            (Random.map Angle.turns (Random.float 0.125 0.375))
+        )
+        plantColorRandom
+
+
+plantColorRandom : Random.Generator Color
+plantColorRandom =
+    Random.map3 Color.rgb
+        (Random.float 0 0.35)
+        (Random.float 0.7 1)
+        (Random.float 0 0.4)
+
+
+blossomRandom : Random.Generator Blossom
+blossomRandom =
+    Random.map (\color -> { color = color })
+        blossomColorRandom
+
+
+blossomColorRandom : Random.Generator Color
+blossomColorRandom =
+    Random.map3 Color.rgb
+        (Random.float 0.3 1)
+        (Random.float 0.3 0.6)
+        (Random.float 0.3 1)
+        |> Random.Extra.filter
+            (\color ->
+                let
+                    c =
+                        color |> Color.toRgba
+
+                    average =
+                        (c.red + c.blue + c.green) / 3
+
+                    isDifferentEnoughFromAverage component =
+                        abs (component - average) > 0.2
+                in
+                List.any isDifferentEnoughFromAverage [ c.red, c.blue, c.green ]
+            )
+
+
+audioPieceToName : AudioKind -> String
 audioPieceToName =
     \audioPiece ->
         case audioPiece of
-            AudioCollideStone ->
-                "collide-stone"
+            AudioMirrorGrow ->
+                "mirror-grow"
+
+            AudioMirrorPlace ->
+                "mirror-place"
 
 
 uiDocument : State -> Browser.Document Event
 uiDocument =
     \state ->
-        { title = "tet"
+        { title = "mirror blossom"
         , body =
             state.specific |> ui |> List.singleton
         }
@@ -552,21 +835,29 @@ ui =
 
             Game gameState ->
                 Svg.svg
-                    [ SvgA.viewBox
-                        0
-                        0
-                        gameState.windowSize.width
-                        gameState.windowSize.height
+                    [ SvgA.viewBox 0 0 gameState.windowSize.width gameState.windowSize.height
+                    , TypedSvg.Events.on "mousemove"
+                        (Json.Decode.map2 (\clientX clientY -> MouseMoved { clientX = clientX, clientY = clientY })
+                            (Json.Decode.field "clientX" Json.Decode.float)
+                            (Json.Decode.field "clientY" Json.Decode.float)
+                            |> VirtualDom.Normal
+                        )
+                    , TypedSvg.Events.onMouseUp MouseReleased
                     ]
-                    [ gameState |> backgroundUi
+                    [ backgroundUi
                     , [ gameState |> worldUi ]
                         |> Svg.g
                             [ SvgA.transform
                                 [ Svg.Translate
                                     (gameState.windowSize.width / 2)
-                                    (gameState.windowSize.height / 2)
+                                    -gameState.windowSize.height
                                 ]
                             ]
+                        |> List.singleton
+                        |> Svg.g
+                            [ SvgA.transform [ Svg.Scale 1 -1 ]
+                            ]
+                    , gameState |> scoreUi
                     ]
                     |> Html.map (Game >> Specific)
 
@@ -588,83 +879,184 @@ menuUi =
                 , Ui.width Ui.fill
                 ]
                 { onPress = GameStartClicked |> Just
-                , label = Ui.text "start" |> Ui.el [ Ui.centerX ]
+                , label = Ui.text "play" |> Ui.el [ Ui.centerX ]
                 }
             ]
 
 
 worldUi :
     { state_
-        | world : Physics.World BodyWhat
+        | plant : Plant
+        , lightRays : List LightRay
+        , blossomSnappedToMouse : Maybe FreeBlossom
+        , freeBlossoms : List FreeBlossom
         , camera : Frame2d Pixels Float { defines : Float }
+        , windowSize : { width : Float, height : Float }
     }
-    -> Svg event_
+    -> Svg GameEvent
 worldUi =
     \state ->
-        Svg.g [ SvgA.transform [ Svg.Scale 1 -1 ] ]
-            [ Svg.g
-                [ SvgA.transform
-                    (state.camera
-                        |> cameraToTransform
-                    )
-                ]
-                (state.world |> List.map bodyUi)
-            ]
-
-
-bodyUi : Physics.Body BodyWhat -> Svg event_
-bodyUi =
-    \body ->
         Svg.g
             [ SvgA.transform
-                (body |> Physics.frame |> frameToTransform)
+                (state.camera |> cameraToTransform)
             ]
-            [ case body.what of
-                Player playerWhat ->
-                    body
-                        |> Physics.whatReplace playerWhat
-                        |> playerUi
+            ((state.lightRays |> List.map (lightRayUi state))
+                ++ [ state.plant |> plantWithoutBlossomsUi, state.plant |> plantBlossomsOnlyUi ]
+                ++ (state.freeBlossoms
+                        |> List.indexedMap
+                            (\i freeBlossom ->
+                                freeBlossom |> freeBlossomUi [ TypedSvg.Events.onMouseDown (FreeBlossomPressed i) ]
+                            )
+                   )
+                ++ (case state.blossomSnappedToMouse of
+                        Nothing ->
+                            []
 
-                Obstacle obstacleWhat ->
-                    body
-                        |> Physics.whatReplace obstacleWhat
-                        |> obstacleUi
-            ]
+                        Just snappedBlossom ->
+                            [ snappedBlossom |> freeBlossomUi [] ]
+                   )
+            )
 
 
-shapeDebug : Physics.Shape -> Svg event_
-shapeDebug =
-    \shape ->
-        case shape of
-            Physics.Circle circle ->
-                Svg.circle
-                    [ SvgA.r (circle.radius |> Pixels.toFloat |> Svg.px)
-                    , SvgA.stroke (Svg.Paint Color.red)
+plantWithoutBlossomsUi : Plant -> Svg event_
+plantWithoutBlossomsUi =
+    \plant ->
+        case plant |> Tree.children of
+            [] ->
+                plant |> Tree.label |> plantSegmentUi
+
+            sub0 :: sub1Up ->
+                [ (sub0 :: sub1Up)
+                    |> List.map plantWithoutBlossomsUi
+                    |> Svg.g
+                        [ SvgA.transform
+                            [ Point2d.origin
+                                |> Point2d.translateBy (plant |> Tree.label |> .orientation)
+                                |> pointToTranslateTransform
+                            ]
+                        ]
+                , plant |> Tree.label |> plantSegmentUi
+                ]
+                    |> Svg.g []
+
+
+plantSegmentUi : PlantSegment -> Svg event_
+plantSegmentUi =
+    Svg.Lazy.lazy
+        (\label ->
+            let
+                ( x2, y2 ) =
+                    Point2d.origin
+                        |> Point2d.translateBy label.orientation
+                        |> Point2d.toTuple Pixels.toFloat
+            in
+            Svg.line
+                [ SvgA.x1 (Svg.px 0)
+                , SvgA.y1 (Svg.px 0)
+                , SvgA.x2 (Svg.px x2)
+                , SvgA.y2 (Svg.px y2)
+                , SvgA.stroke (Svg.Paint label.color)
+                , SvgA.strokeWidth (Svg.px 9)
+                , SvgA.strokeLinecap Svg.StrokeLinecapRound
+                ]
+                []
+        )
+
+
+plantBlossomsOnlyUi : Plant -> Svg GameEvent
+plantBlossomsOnlyUi =
+    plantBlossomsOnlyUiFrom Tree.Path.atTrunk
+
+
+plantBlossomsOnlyUiFrom : TreePath -> Plant -> Svg GameEvent
+plantBlossomsOnlyUiFrom path =
+    \plant ->
+        [ plant
+            |> Tree.children
+            |> List.indexedMap
+                (\subIndex sub ->
+                    sub |> plantBlossomsOnlyUiFrom (path |> Tree.Path.toChild subIndex)
+                )
+            |> Svg.g
+                [ SvgA.transform
+                    [ Point2d.origin
+                        |> Point2d.translateBy (plant |> Tree.label |> .orientation)
+                        |> pointToTranslateTransform
                     ]
-                    []
+                ]
+        , case plant |> Tree.label |> .blossom of
+            Nothing ->
+                [] |> Svg.g []
 
-            Physics.Polygon faces ->
-                Svg.polygon
-                    [ SvgA.points
-                        (faces
-                            |> List.concatMap
-                                (\face ->
-                                    [ face |> LineSegment2d.startPoint |> point2dToTupleBoth Pixels.toFloat
-                                    , face |> LineSegment2d.endPoint |> point2dToTupleBoth Pixels.toFloat
-                                    ]
-                                )
-                        )
-                    , SvgA.stroke (Svg.Paint Color.red)
-                    ]
-                    []
+            Just blossom ->
+                blossomUi path blossom
+                    |> List.singleton
+                    |> Svg.g
+                        [ SvgA.transform
+                            [ Point2d.origin
+                                |> Point2d.translateBy (plant |> Tree.label |> .orientation |> Vector2d.half)
+                                |> pointToTranslateTransform
+                            ]
+                        ]
+        ]
+            |> Svg.g []
 
 
-frameToTransform : Frame2d Pixels Float { defines : Float } -> List Svg.Transform
-frameToTransform frame =
-    [ Svg.Translate
-        (frame |> Frame2d.originPoint |> Point2d.xCoordinate |> Pixels.toFloat)
-        (frame |> Frame2d.originPoint |> Point2d.yCoordinate |> Pixels.toFloat)
-    ]
+blossomRadius : Quantity Float Pixels
+blossomRadius =
+    lightRayRadius |> Quantity.multiplyBy 0.5
+
+
+blossomUi : TreePath -> Blossom -> Svg GameEvent
+blossomUi path =
+    \blossom ->
+        blossom
+            |> blossomUiWith
+                [ TypedSvg.Events.onMouseDown (PlantBlossomPressed path) ]
+
+
+blossomUiWith attrs =
+    \blossom ->
+        [ Svg.ellipse
+            (attrs
+                ++ [ SvgA.fill (Svg.Paint blossom.color)
+                   , SvgA.rx (Svg.px (0.75 * (blossomRadius |> Pixels.toFloat)))
+                   , SvgA.ry (Svg.px (1.7 * (blossomRadius |> Pixels.toFloat)))
+                   ]
+            )
+            []
+        , Svg.ellipse
+            (attrs
+                ++ [ SvgA.fill (Svg.Paint blossom.color)
+                   , SvgA.ry (Svg.px (0.75 * (blossomRadius |> Pixels.toFloat)))
+                   , SvgA.rx (Svg.px (1.7 * (blossomRadius |> Pixels.toFloat)))
+                   ]
+            )
+            []
+        ]
+            |> Svg.g []
+
+
+freeBlossomUi : List (TypedSvg.Core.Attribute event) -> FreeBlossom -> Svg event
+freeBlossomUi attrs =
+    \freeBlossom ->
+        { color = freeBlossom.color }
+            |> blossomUiWith attrs
+            |> List.singleton
+            |> Svg.g
+                [ SvgA.transform
+                    [ freeBlossom |> .point |> pointToTranslateTransform ]
+                ]
+
+
+withAlpha : Float -> Color -> Color
+withAlpha newAlpha =
+    \color ->
+        let
+            oldRgba =
+                color |> Color.toRgba
+        in
+        Color.fromRgba { oldRgba | alpha = newAlpha }
 
 
 cameraToTransform : Frame2d Pixels Float { defines : Float } -> List Svg.Transform
@@ -675,13 +1067,21 @@ cameraToTransform frame =
     ]
 
 
+pointToTranslateTransform : Point2d Pixels Float -> Svg.Transform
+pointToTranslateTransform =
+    \point ->
+        Svg.Translate
+            (point |> Point2d.xCoordinate |> Pixels.toFloat)
+            (point |> Point2d.yCoordinate |> Pixels.toFloat)
+
+
 accentColor : Color
 accentColor =
-    Color.rgb 1 0.3 0
+    Color.rgb 0.05 0.2 0.5
 
 
-backgroundPlainUi : Svg event_
-backgroundPlainUi =
+backgroundUi : Svg event_
+backgroundUi =
     Svg.rect
         [ SvgA.width (Svg.percent 100)
         , SvgA.height (Svg.percent 100)
@@ -690,241 +1090,113 @@ backgroundPlainUi =
         []
 
 
-backgroundUi :
+scoreUi :
     { state_
-        | runStartTime : Time.Posix
-        , lastSimulationTime : Time.Posix
+        | highest : Quantity Float Pixels
     }
-    -> Svg event_
-backgroundUi =
+    -> Svg GameEvent
+scoreUi =
     \state ->
-        Svg.g []
-            [ backgroundPlainUi
-            , let
-                runDuration : Duration
-                runDuration =
-                    Duration.from state.runStartTime state.lastSimulationTime
-              in
-              Svg.text_
-                [ SvgA.x (Svg.percent 50)
-                , SvgA.y (Svg.percent 16)
-                , SvgA.fontSize (Svg.percent 400)
-                , SvgA.fontWeight Svg.FontWeightBolder
-                , SvgA.opacity (Svg.Opacity 0.28)
-                , SvgA.textAnchor Svg.AnchorMiddle
-                , SvgA.fontFamily [ "monospace" ]
-                ]
-                [ TypedSvg.Core.text
-                    ([ runDuration
-                        |> Duration.inMinutes
-                        |> floor
-                        |> remainderBy 60
-                        |> starting0s 2
-                     , " "
-                     , runDuration
-                        |> Duration.inSeconds
-                        |> floor
-                        |> remainderBy 60
-                        |> starting0s 2
-                     , " "
-                     , runDuration
-                        |> Duration.inMilliseconds
-                        |> floor
-                        |> remainderBy 1000
-                        |> starting0s 1
-                     ]
-                        |> String.concat
-                    )
-                ]
+        [ Svg.rect
+            [ SvgA.fill (Svg.Paint (Color.rgba 0 0 0 0.5))
+            , SvgA.width (Svg.percent 100)
+            , SvgA.height (Svg.percent 14)
             ]
-
-
-starting0s : Int -> Int -> String
-starting0s digits =
-    \int ->
-        if digits == 0 then
-            ""
-
-        else
-            (int // 10 |> starting0s (digits - 1))
-                ++ (case int of
-                        0 ->
-                            "\u{2002}"
-
-                        intNon0 ->
-                            intNon0 |> remainderBy 10 |> String.fromInt
-                   )
-
-
-playerRadius : Quantity Float Pixels
-playerRadius =
-    Pixels.float 40
-
-
-playerUi :
-    Physics.Body PlayerWhat
-    -> Svg event_
-playerUi =
-    \player ->
-        let
-            trail =
-                case player |> Physics.what |> .locationTrail |> List.reverse of
-                    [] ->
-                        Svg.g [] []
-
-                    oldestTrailLocation :: _ ->
-                        let
-                            trailOffset : Vector2d Pixels Float
-                            trailOffset =
-                                Vector2d.from (player |> Physics.location) oldestTrailLocation
-
-                            trailDirection : Direction2d Float
-                            trailDirection =
-                                trailOffset
-                                    |> Vector2d.direction
-                                    |> Maybe.withDefault Direction2d.negativeY
-
-                            left : Point2d Pixels Float
-                            left =
-                                Point2d.origin
-                                    |> Point2d.translateBy
-                                        (Vector2d.withLength playerRadius (trailDirection |> Direction2d.rotateCounterclockwise))
-
-                            right : Point2d Pixels Float
-                            right =
-                                Point2d.origin
-                                    |> Point2d.translateBy
-                                        (Vector2d.withLength playerRadius (trailDirection |> Direction2d.rotateClockwise))
-
-                            trailEndCenter : Point2d Pixels Float
-                            trailEndCenter =
-                                Point2d.origin |> Point2d.translateBy trailOffset
-                        in
-                        Svg.g []
-                            [ Svg.polygon
-                                [ SvgA.fill (Svg.Paint (Color.rgb 0 0 0))
-                                , SvgA.points
-                                    ([ right
-                                     , right |> Point2d.translateBy trailOffset
-                                     , left |> Point2d.translateBy trailOffset
-                                     , left
-                                     ]
-                                        |> List.map (point2dToTupleBoth Pixels.toFloat)
-                                    )
-                                ]
-                                []
-                            , Svg.circle
-                                [ SvgA.r (Svg.px (playerRadius |> Pixels.toFloat))
-                                , SvgA.fill (Svg.Paint (Color.rgb 0 0 0))
-                                , SvgA.cx (Svg.px (trailEndCenter |> Point2d.xCoordinate |> Pixels.toFloat))
-                                , SvgA.cy (Svg.px (trailEndCenter |> Point2d.yCoordinate |> Pixels.toFloat))
-                                ]
-                                []
-                            ]
-        in
-        Svg.g
             []
-            [ Svg.defs
-                []
-                [ Svg.filter
-                    [ SvgA.id "plyer-blur"
-                    ]
-                    [ TypedSvg.Filters.gaussianBlur
-                        [ TypedSvg.Core.attribute "stdDeviation"
-                            ((player
-                                |> Physics.speed
-                                |> Vector2d.for (Duration.seconds 0.3)
-                                |> Vector2d.xComponent
-                                |> Pixels.toFloat
-                                |> floor
-                                |> String.fromInt
-                             )
-                                ++ " "
-                                ++ (player
-                                        |> Physics.speed
-                                        |> Vector2d.for (Duration.seconds 0.3)
-                                        |> Vector2d.yComponent
-                                        |> Pixels.toFloat
-                                        |> floor
-                                        |> String.fromInt
-                                   )
-                            )
-
-                        -- , TypedSvg.Filters.Attributes.radius 0 10
-                        ]
-                        []
-                    ]
-                ]
-            , trail
-            , Svg.circle
-                [ SvgA.r (Svg.px (playerRadius |> Pixels.toFloat))
-                , SvgA.fill (Svg.Paint (Color.rgb 1 1 1))
-                , SvgA.filter (Svg.Filter "url(#player-blur)")
-                ]
-                []
-            , Svg.circle
-                [ SvgA.r (Svg.px 10)
-                , SvgA.fill (Svg.Paint (Color.rgb 0 0 0))
-                , SvgA.cx (Svg.px -15)
-                ]
-                []
-            , Svg.circle
-                [ SvgA.r (Svg.px 10)
-                , SvgA.fill (Svg.Paint (Color.rgb 0 0 0))
-                , SvgA.cx (Svg.px 15)
-                ]
-                []
+        , Svg.text_
+            [ SvgA.x (Svg.percent 50)
+            , SvgA.y (Svg.percent 8)
+            , SvgA.fontSize (Svg.percent 300)
+            , SvgA.fontWeight Svg.FontWeightBolder
+            , SvgA.opacity (Svg.Opacity 0.5)
+            , SvgA.textAnchor Svg.AnchorMiddle
+            , SvgA.fontFamily [ "monospace" ]
+            , SvgA.fill (Svg.Paint (Color.rgb 1 1 1))
             ]
+            [ TypedSvg.Core.text
+                ([ "highest: "
+                 , (state.highest |> Pixels.toFloat |> floor)
+                    // 30
+                    |> String.fromInt
+                 , "."
+                 , state.highest
+                    |> Pixels.toFloat
+                    |> floor
+                    |> remainderBy 30
+                    |> String.fromInt
+                 , "m"
+                 ]
+                    |> String.concat
+                )
+            ]
+        ]
+            |> Svg.g []
 
 
-obstacleWidth : Quantity Float Pixels
-obstacleWidth =
-    Pixels.float 30
+lightRayRadius : Quantity Float Pixels
+lightRayRadius =
+    Pixels.float 27
 
 
-obstacleUi : Physics.Body ObstacleWhat -> Svg event_
-obstacleUi =
-    \obstacle ->
+axisToEndPointsInWidth width axis =
+    { start =
+        axis
+            |> Axis2d.intersectionPoint
+                (Axis2d.through
+                    (Point2d.fromRecord Pixels.float { x = -width / 2, y = 0 })
+                    Direction2d.positiveY
+                )
+            |> Maybe.withDefault Point2d.origin
+    , end =
+        axis
+            |> Axis2d.intersectionPoint
+                (Axis2d.through
+                    (Point2d.fromRecord Pixels.float { x = width / 2, y = 0 })
+                    Direction2d.positiveY
+                )
+            |> Maybe.withDefault Point2d.origin
+    }
+
+
+lightRayUi :
+    { state_ | windowSize : { width : Float, height : Float } }
+    -> LightRay
+    -> Svg event_
+lightRayUi state =
+    \lightRay ->
         let
-            attributes =
-                [ SvgA.fill (Svg.Paint (Color.rgb 1 1 1))
-                , SvgA.strokeWidth (Svg.px (obstacleWidth |> Pixels.toFloat))
-                , SvgA.strokeLinecap Svg.StrokeLinecapRound
-                , SvgA.strokeLinejoin Svg.StrokeLinejoinRound
-                ]
+            lightRayInScreen =
+                lightRay.axis |> halfLineToAxis |> axisToEndPointsInWidth state.windowSize.width
         in
-        case obstacle |> Physics.shape of
-            Physics.Circle circle ->
-                Svg.circle
-                    ([ SvgA.r (circle.radius |> Pixels.toFloat |> Svg.px)
-                     ]
-                        ++ attributes
-                    )
-                    []
-
-            Physics.Polygon faces ->
-                Svg.polygon
-                    ([ SvgA.points
-                        (faces
-                            |> List.concatMap
-                                (\face ->
-                                    [ face |> LineSegment2d.startPoint |> point2dToTupleBoth Pixels.toFloat
-                                    , face |> LineSegment2d.endPoint |> point2dToTupleBoth Pixels.toFloat
-                                    ]
-                                )
-                        )
-                     ]
-                        ++ attributes
-                    )
-                    []
-
-
-point2dToTupleBoth : (Quantity.Quantity Float units -> a) -> Point2d units coordinates_ -> ( a, a )
-point2dToTupleBoth quantityChange =
-    \point ->
-        ( point |> Point2d.xCoordinate |> quantityChange
-        , point |> Point2d.yCoordinate |> quantityChange
-        )
+        [ Svg.polyline
+            [ SvgA.points
+                ([ lightRayInScreen.start, lightRayInScreen.end ]
+                    |> List.map (Point2d.toTuple Pixels.toFloat)
+                )
+            , SvgA.stroke (Svg.Paint (Color.rgba 1 0.9 0.8 0.25))
+            , SvgA.strokeWidth (Svg.px (lightRayRadius |> Quantity.twice |> Pixels.toFloat))
+            ]
+            []
+        , Svg.polyline
+            [ SvgA.points
+                ([ lightRayInScreen.start, lightRayInScreen.end ]
+                    |> List.map (Point2d.toTuple Pixels.toFloat)
+                )
+            , SvgA.stroke (Svg.Paint (Color.rgba 1 0.9 0.8 0.1))
+            , SvgA.strokeWidth (Svg.px (lightRayRadius |> Quantity.multiplyBy 5 |> Pixels.toFloat))
+            ]
+            []
+        , Svg.polyline
+            [ SvgA.points
+                ([ lightRayInScreen.start, lightRayInScreen.end ]
+                    |> List.map (Point2d.toTuple Pixels.toFloat)
+                )
+            , SvgA.stroke (Svg.Paint (Color.rgba 1 0.9 0.8 0.02))
+            , SvgA.strokeWidth (Svg.px (lightRayRadius |> Quantity.multiplyBy 15 |> Pixels.toFloat))
+            ]
+            []
+        ]
+            |> Svg.g []
 
 
 audio : State -> Audio.Audio
@@ -935,15 +1207,21 @@ audio =
                 Audio.silence
 
             Game gameState ->
-                case state.shared.audioCollideStone of
-                    Err _ ->
-                        Audio.silence
+                audioKinds
+                    |> List.map
+                        (\audioKind ->
+                            case state.shared.audio |> accessAudioOfKind audioKind of
+                                Err _ ->
+                                    Audio.silence
 
-                    Ok moveAudio ->
-                        gameState.collideStoneAudioTimes
-                            |> List.map
-                                (\time -> Audio.audio moveAudio time)
-                            |> Audio.group
+                                Ok loadedAudio ->
+                                    gameState.audioTimes
+                                        |> accessAudioOfKind audioKind
+                                        |> List.map
+                                            (\time -> Audio.audio loadedAudio time)
+                                        |> Audio.group
+                        )
+                    |> Audio.group
 
 
 
@@ -960,3 +1238,168 @@ colorToUi : Color -> Ui.Color
 colorToUi =
     \color ->
         Ui.fromRgb (color |> Color.toRgba)
+
+
+onJust : Maybe a -> Maybe a -> Maybe a
+onJust ifNothing =
+    \maybe ->
+        case maybe of
+            Nothing ->
+                ifNothing
+
+            Just exists ->
+                Just exists
+
+
+halfLineToAxis =
+    \vector ->
+        Axis2d.through vector.originPoint vector.direction
+
+
+type alias HalfLine =
+    { direction : Direction2d Float, originPoint : Point2d Pixels Float }
+
+
+untilWindowBounds : { width : Float, height : Float } -> HalfLine -> Point2d Pixels Float
+untilWindowBounds windowSize =
+    -- TODO
+    \halfLine ->
+        halfLine
+            |> halfLineToAxis
+            |> Axis2d.intersectionPoint
+                (Axis2d.x
+                    |> Axis2d.translateBy
+                        (Vector2d.fromRecord Pixels.float
+                            { x = windowSize.width / 2, y = 0 }
+                        )
+                )
+            |> Maybe.withDefault halfLine.originPoint
+
+
+reflectThreshold : Quantity Float Pixels
+reflectThreshold =
+    lightRayRadius |> Quantity.plus blossomRadius
+
+
+reflect :
+    { windowSize : { width : Float, height : Float }
+    , source : LightRay
+    , mirrors : List (Point2d Pixels Float)
+    }
+    -> List (Point2d Pixels Float)
+reflect { windowSize, source, mirrors } =
+    let
+        sourceEndPoints =
+            { start = source.axis.originPoint
+            , end = source.axis |> untilWindowBounds windowSize
+            }
+
+        distanceToStart mirror =
+            Vector2d.from sourceEndPoints.start mirror.pointOnLine
+                |> vector2dLengthSquared
+                |> Pixels.toFloat
+
+        addHitInfo mirrorPoint =
+            let
+                hitInfo =
+                    onLineSegment2dClosestTo mirrorPoint
+                        (LineSegment2d.fromEndpoints ( sourceEndPoints.start, sourceEndPoints.end ))
+            in
+            { point = mirrorPoint
+            , distance = hitInfo.distance
+            , pointOnLine = hitInfo.pointOnLine
+            }
+
+        isHit mirror =
+            mirror.distance |> Quantity.lessThanOrEqualTo reflectThreshold
+    in
+    case mirrors |> List.map addHitInfo |> List.sortBy distanceToStart |> List.Extra.find isHit of
+        Nothing ->
+            [ sourceEndPoints.start, sourceEndPoints.end ]
+
+        Just nearestHitMirror ->
+            case
+                Axis2d.throughPoints nearestHitMirror.pointOnLine
+                    (nearestHitMirror.point |> Debug.todo "times (nearestHitMirror.distance |> divideBy reflectThreshold)")
+            of
+                Nothing ->
+                    [ sourceEndPoints.start, nearestHitMirror.pointOnLine, sourceEndPoints.start ]
+
+                Just reflectionAxis ->
+                    [ sourceEndPoints.start, nearestHitMirror.pointOnLine ]
+                        ++ reflect
+                            { windowSize = windowSize
+                            , source =
+                                { axis =
+                                    { originPoint = nearestHitMirror.pointOnLine
+                                    , direction = reflectionAxis |> Axis2d.direction
+                                    }
+                                }
+                            , mirrors = mirrors |> List.filter (\mirror -> mirror /= nearestHitMirror.point)
+                            }
+
+
+onLineSegment2dClosestTo :
+    Point2d Pixels Float
+    -> LineSegment2d Pixels Float
+    ->
+        { distance : Quantity Float Pixels
+        , pointOnLine : Point2d Pixels Float
+        }
+onLineSegment2dClosestTo point lineSegment =
+    let
+        distance =
+            let
+                startToPoint : Vector2d Pixels Float
+                startToPoint =
+                    Vector2d.from (lineSegment |> LineSegment2d.startPoint) point
+
+                lineSegmentVector : Vector2d Pixels Float
+                lineSegmentVector =
+                    Vector2d.from (lineSegment |> LineSegment2d.startPoint) (lineSegment |> LineSegment2d.endPoint)
+
+                fractionAlongLineSegment =
+                    (startToPoint |> Vector2d.xComponent)
+                        |> Quantity.times (lineSegmentVector |> Vector2d.xComponent)
+                        |> Quantity.plus
+                            ((startToPoint |> Vector2d.yComponent)
+                                |> Quantity.times (lineSegmentVector |> Vector2d.yComponent)
+                            )
+                        |> Quantity.over (lineSegmentVector |> vector2dLengthSquared)
+                        |> Quantity.clamp (Pixels.float 0) (Pixels.float 1)
+
+                lineSegmentFraction : Vector2d Pixels Float
+                lineSegmentFraction =
+                    lineSegmentVector |> Vector2d.scaleBy (fractionAlongLineSegment |> Pixels.toFloat)
+
+                fractionEndPoint : Point2d Pixels Float
+                fractionEndPoint =
+                    lineSegment |> LineSegment2d.startPoint |> Point2d.translateBy lineSegmentFraction
+
+                distanceVector : Vector2d Pixels Float
+                distanceVector =
+                    Vector2d.from fractionEndPoint point
+            in
+            distanceVector |> Vector2d.length
+    in
+    { distance = distance
+    , pointOnLine =
+        point
+            |> Point2d.translateBy
+                (Vector2d.withLength distance
+                    (lineSegment
+                        |> LineSegment2d.perpendicularDirection
+                        |> Maybe.withDefault (Direction2d.fromAngle (Angle.turns 0.25))
+                    )
+                )
+    }
+
+
+vector2dLengthSquared : Vector2d Pixels Float -> Quantity Float Pixels
+vector2dLengthSquared =
+    \vector2d ->
+        vector2d
+            |> Vector2d.xComponent
+            |> Quantity.squared
+            |> Quantity.plus (vector2d |> Vector2d.yComponent |> Quantity.squared)
+            |> Quantity.over Pixels.pixel
