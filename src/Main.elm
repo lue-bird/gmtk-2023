@@ -205,20 +205,21 @@ main =
 type AudioKind
     = AudioMirrorGrow
     | AudioMirrorPlace
+    | AudioMusic
 
 
 audioKinds : List AudioKind
 audioKinds =
-    [ AudioMirrorGrow, AudioMirrorPlace ]
+    [ AudioMirrorGrow, AudioMirrorPlace, AudioMusic ]
 
 
 type alias EachAudio perKind =
-    { mirrorGrow : perKind, mirrorPlace : perKind }
+    { mirrorGrow : perKind, mirrorPlace : perKind, music : perKind }
 
 
 eachAudio : perKind -> EachAudio perKind
 eachAudio perKind =
-    { mirrorGrow = perKind, mirrorPlace = perKind }
+    { mirrorGrow = perKind, mirrorPlace = perKind, music = perKind }
 
 
 alterAudioOfKind : AudioKind -> (a -> a) -> EachAudio a -> EachAudio a
@@ -230,6 +231,9 @@ alterAudioOfKind kind f =
         AudioMirrorPlace ->
             \r -> { r | mirrorPlace = r.mirrorPlace |> f }
 
+        AudioMusic ->
+            \r -> { r | music = r.music |> f }
+
 
 accessAudioOfKind : AudioKind -> EachAudio a -> a
 accessAudioOfKind kind =
@@ -239,6 +243,23 @@ accessAudioOfKind kind =
 
         AudioMirrorPlace ->
             .mirrorPlace
+
+        AudioMusic ->
+            .music
+
+
+audioPieceToName : AudioKind -> String
+audioPieceToName =
+    \audioPiece ->
+        case audioPiece of
+            AudioMirrorGrow ->
+                "mirror-grow"
+
+            AudioMirrorPlace ->
+                "mirror-place"
+
+            AudioMusic ->
+                "music"
 
 
 init : () -> Reaction State Effect
@@ -802,17 +823,6 @@ blossomColorRandom =
                 in
                 List.any isDifferentEnoughFromAverage [ c.red, c.blue, c.green ]
             )
-
-
-audioPieceToName : AudioKind -> String
-audioPieceToName =
-    \audioPiece ->
-        case audioPiece of
-            AudioMirrorGrow ->
-                "mirror-grow"
-
-            AudioMirrorPlace ->
-                "mirror-place"
 
 
 uiDocument : State -> Browser.Document Event
