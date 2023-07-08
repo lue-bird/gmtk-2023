@@ -1,6 +1,6 @@
 module Main exposing (main)
 
-import Angle
+import Angle exposing (Angle)
 import Audio
 import Axis2d exposing (Axis2d)
 import Browser
@@ -267,16 +267,20 @@ initGame =
                 }
                 []
         , blossomSnappedToMouse = Nothing
-        , freeBlossoms = []
+        , freeBlossoms =
+            [ { color = Color.rgb 0 1 1
+              , point = Point2d.fromRecord Pixels.float { x = -345, y = 395 }
+              }
+            ]
         , lightRays =
             [ { axis =
-                    { originPoint = Point2d.fromRecord Pixels.float { x = -2000, y = 1000 }
-                    , direction = Direction2d.fromAngle (Angle.turns -0.6)
+                    { originPoint = Point2d.fromRecord Pixels.float { x = -1000, y = 500 }
+                    , direction = Direction2d.fromAngle (Angle.turns -0.02)
                     }
               }
             ]
-        , camera = Frame2d.atPoint (Point2d.fromRecord Pixels.float { x = 0, y = -50 })
-        , scrollYSpeed = Pixels.float 10 |> Quantity.per Duration.second
+        , camera = Frame2d.atPoint (Point2d.fromRecord Pixels.float { x = 0, y = -100 })
+        , scrollYSpeed = Pixels.float 14 |> Quantity.per Duration.second
         , highest = Pixels.float 30
         , keysPressed = []
         , randomSeed =
@@ -900,7 +904,8 @@ worldUi =
             [ SvgA.transform
                 (state.camera |> cameraToTransform)
             ]
-            ((state.lightRays |> List.map (lightRayUi state))
+            (groundUi
+                :: (state.lightRays |> List.map (lightRayUi state))
                 ++ [ state.plant |> plantWithoutBlossomsUi, state.plant |> plantBlossomsOnlyUi ]
                 ++ (state.freeBlossoms
                         |> List.indexedMap
@@ -916,6 +921,165 @@ worldUi =
                             [ snappedBlossom |> freeBlossomUi [] ]
                    )
             )
+
+
+groundUi =
+    [ Svg.ellipse
+        [ SvgA.rx (Svg.percent 60)
+        , SvgA.ry (Svg.px 100)
+        , SvgA.cy (Svg.px -100)
+        , SvgA.fill (Svg.Paint (Color.rgb 0.3 0.1 0))
+        ]
+        []
+    , Svg.ellipse
+        [ SvgA.rx (Svg.percent 40)
+        , SvgA.ry (Svg.px 230)
+        , SvgA.cy (Svg.px -210)
+        , SvgA.cx (Svg.px -210)
+        , SvgA.fill (Svg.Paint (Color.rgb 0.25 0.13 0))
+        ]
+        []
+    , plantWithoutBlossomsUi
+        (Tree.tree
+            { orientation = Vector2d.fromPixels { x = 0, y = 20 }
+            , color = Color.rgb 0.4 0.6 0.1
+            , blossom = Nothing
+            }
+            [ Tree.tree
+                { orientation = Vector2d.fromPixels { x = 50, y = 20 }
+                , color = Color.rgb 0 0.8 0
+                , blossom = Nothing
+                }
+                [ Tree.tree
+                    { orientation = Vector2d.fromPixels { x = -20, y = 50 }
+                    , color = Color.rgb 0 0.4 0
+                    , blossom = Nothing
+                    }
+                    []
+                , Tree.tree
+                    { orientation = Vector2d.fromPixels { x = -20, y = 10 }
+                    , color = Color.rgb 0 0.2 0
+                    , blossom = Nothing
+                    }
+                    []
+                , Tree.tree
+                    { orientation = Vector2d.fromPixels { x = 10, y = 60 }
+                    , color = Color.rgb 0.3 0.8 0
+                    , blossom = Nothing
+                    }
+                    []
+                ]
+            , Tree.tree
+                { orientation = Vector2d.fromPixels { x = -20, y = 20 }
+                , color = Color.rgb 0 0.8 0
+                , blossom = Nothing
+                }
+                [ Tree.tree
+                    { orientation = Vector2d.fromPixels { x = -10, y = 50 }
+                    , color = Color.rgb 0 0.4 0
+                    , blossom = Nothing
+                    }
+                    []
+                , Tree.tree
+                    { orientation = Vector2d.fromPixels { x = 20, y = 10 }
+                    , color = Color.rgb 0 0.2 0
+                    , blossom = Nothing
+                    }
+                    []
+                , Tree.tree
+                    { orientation = Vector2d.fromPixels { x = -20, y = 10 }
+                    , color = Color.rgb 0.3 0.8 0
+                    , blossom = Nothing
+                    }
+                    []
+                ]
+            ]
+        )
+        |> List.singleton
+        |> Svg.g
+            [ SvgA.transform
+                [ Point2d.fromRecord Pixels.float { x = 250, y = -10 }
+                    |> pointToTranslateTransform
+                ]
+            ]
+    , [ ( -180, -50 ), ( -100, -80 ), ( -10, -10 ), ( 40, -40 ), ( 240, -60 ) ]
+        |> List.map
+            (\( x, y ) ->
+                Svg.ellipse
+                    [ SvgA.cx (Svg.px x)
+                    , SvgA.cy (Svg.px y)
+                    , SvgA.fill (Svg.Paint (Color.rgba 1 1 0 0.1))
+                    , SvgA.rx (Svg.px 30)
+                    , SvgA.ry (Svg.px 10)
+                    ]
+                    []
+            )
+        |> Svg.g []
+    , plantWithoutBlossomsUi
+        (Tree.tree
+            { orientation = Vector2d.fromPixels { x = -6, y = 20 }
+            , color = Color.rgb 0.4 0.6 0.1
+            , blossom = Nothing
+            }
+            [ Tree.tree
+                { orientation = Vector2d.fromPixels { x = 10, y = 20 }
+                , color = Color.rgb 0 0.8 0.2
+                , blossom = Nothing
+                }
+                [ Tree.tree
+                    { orientation = Vector2d.fromPixels { x = -30, y = 50 }
+                    , color = Color.rgb 0.3 0.4 0
+                    , blossom = Nothing
+                    }
+                    []
+                , Tree.tree
+                    { orientation = Vector2d.fromPixels { x = -20, y = 10 }
+                    , color = Color.rgb 0 0.2 0.2
+                    , blossom = Nothing
+                    }
+                    []
+                , Tree.tree
+                    { orientation = Vector2d.fromPixels { x = 18, y = 40 }
+                    , color = Color.rgb 0.3 0.8 0.3
+                    , blossom = Nothing
+                    }
+                    []
+                ]
+            , Tree.tree
+                { orientation = Vector2d.fromPixels { x = 20, y = 20 }
+                , color = Color.rgb 0.5 0.8 0.2
+                , blossom = Nothing
+                }
+                [ Tree.tree
+                    { orientation = Vector2d.fromPixels { x = -10, y = 50 }
+                    , color = Color.rgb 0.1 0.3 0.2
+                    , blossom = Nothing
+                    }
+                    []
+                , Tree.tree
+                    { orientation = Vector2d.fromPixels { x = -20, y = 10 }
+                    , color = Color.rgb 0.1 0.5 0.2
+                    , blossom = Nothing
+                    }
+                    []
+                , Tree.tree
+                    { orientation = Vector2d.fromPixels { x = 20, y = 10 }
+                    , color = Color.rgb 0.3 1 0.2
+                    , blossom = Nothing
+                    }
+                    []
+                ]
+            ]
+        )
+        |> List.singleton
+        |> Svg.g
+            [ SvgA.transform
+                [ Point2d.fromRecord Pixels.float { x = -150, y = -15 }
+                    |> pointToTranslateTransform
+                ]
+            ]
+    ]
+        |> Svg.g []
 
 
 plantWithoutBlossomsUi : Plant -> Svg event_
@@ -1159,40 +1323,52 @@ axisToEndPointsInWidth width axis =
 
 
 lightRayUi :
-    { state_ | windowSize : { width : Float, height : Float } }
+    { state_
+        | windowSize : { width : Float, height : Float }
+        , freeBlossoms : List FreeBlossom
+        , blossomSnappedToMouse : Maybe FreeBlossom
+    }
     -> LightRay
     -> Svg event_
 lightRayUi state =
     \lightRay ->
         let
             lightRayInScreen =
-                lightRay.axis |> halfLineToAxis |> axisToEndPointsInWidth state.windowSize.width
+                reflect
+                    { windowSize = state.windowSize
+                    , source = lightRay
+                    , mirrors =
+                        consJust state.blossomSnappedToMouse
+                            state.freeBlossoms
+                            |> List.map (\freeBlossom -> freeBlossom.point)
+                    }
+                    |> List.map (Point2d.toTuple Pixels.toFloat)
         in
         [ Svg.polyline
             [ SvgA.points
-                ([ lightRayInScreen.start, lightRayInScreen.end ]
-                    |> List.map (Point2d.toTuple Pixels.toFloat)
-                )
+                lightRayInScreen
             , SvgA.stroke (Svg.Paint (Color.rgba 1 0.9 0.8 0.25))
             , SvgA.strokeWidth (Svg.px (lightRayRadius |> Quantity.twice |> Pixels.toFloat))
+            , SvgA.fill (Svg.Paint (Color.rgba 0 0 0 0))
+            , SvgA.strokeLinejoin Svg.StrokeLinejoinRound
             ]
             []
         , Svg.polyline
             [ SvgA.points
-                ([ lightRayInScreen.start, lightRayInScreen.end ]
-                    |> List.map (Point2d.toTuple Pixels.toFloat)
-                )
+                lightRayInScreen
             , SvgA.stroke (Svg.Paint (Color.rgba 1 0.9 0.8 0.1))
             , SvgA.strokeWidth (Svg.px (lightRayRadius |> Quantity.multiplyBy 5 |> Pixels.toFloat))
+            , SvgA.fill (Svg.Paint (Color.rgba 0 0 0 0))
+            , SvgA.strokeLinejoin Svg.StrokeLinejoinRound
             ]
             []
         , Svg.polyline
             [ SvgA.points
-                ([ lightRayInScreen.start, lightRayInScreen.end ]
-                    |> List.map (Point2d.toTuple Pixels.toFloat)
-                )
+                lightRayInScreen
             , SvgA.stroke (Svg.Paint (Color.rgba 1 0.9 0.8 0.02))
             , SvgA.strokeWidth (Svg.px (lightRayRadius |> Quantity.multiplyBy 15 |> Pixels.toFloat))
+            , SvgA.fill (Svg.Paint (Color.rgba 0 0 0 0))
+            , SvgA.strokeLinejoin Svg.StrokeLinejoinRound
             ]
             []
         ]
@@ -1251,6 +1427,16 @@ onJust ifNothing =
                 Just exists
 
 
+consJust : Maybe a -> List a -> List a
+consJust maybeHead list =
+    case maybeHead of
+        Nothing ->
+            list
+
+        Just head ->
+            head :: list
+
+
 halfLineToAxis =
     \vector ->
         Axis2d.through vector.originPoint vector.direction
@@ -1262,15 +1448,21 @@ type alias HalfLine =
 
 untilWindowBounds : { width : Float, height : Float } -> HalfLine -> Point2d Pixels Float
 untilWindowBounds windowSize =
-    -- TODO
     \halfLine ->
         halfLine
             |> halfLineToAxis
             |> Axis2d.intersectionPoint
-                (Axis2d.x
+                (Axis2d.y
                     |> Axis2d.translateBy
                         (Vector2d.fromRecord Pixels.float
-                            { x = windowSize.width / 2, y = 0 }
+                            { x =
+                                if (halfLine.direction |> Direction2d.xComponent) > 0 then
+                                    windowSize.width / 2 + 50
+
+                                else
+                                    -windowSize.width / 2 - 50
+                            , y = 0
+                            }
                         )
                 )
             |> Maybe.withDefault halfLine.originPoint
@@ -1278,7 +1470,7 @@ untilWindowBounds windowSize =
 
 reflectThreshold : Quantity Float Pixels
 reflectThreshold =
-    lightRayRadius |> Quantity.plus blossomRadius
+    lightRayRadius |> Quantity.plus (blossomRadius |> Quantity.multiplyBy 1.45)
 
 
 reflect :
@@ -1289,13 +1481,11 @@ reflect :
     -> List (Point2d Pixels Float)
 reflect { windowSize, source, mirrors } =
     let
-        sourceEndPoints =
-            { start = source.axis.originPoint
-            , end = source.axis |> untilWindowBounds windowSize
-            }
+        sourceEndPoint =
+            source.axis |> untilWindowBounds windowSize
 
         distanceToStart mirror =
-            Vector2d.from sourceEndPoints.start mirror.pointOnLine
+            Vector2d.from source.axis.originPoint mirror.pointOnLine
                 |> vector2dLengthSquared
                 |> Pixels.toFloat
 
@@ -1303,7 +1493,7 @@ reflect { windowSize, source, mirrors } =
             let
                 hitInfo =
                     onLineSegment2dClosestTo mirrorPoint
-                        (LineSegment2d.fromEndpoints ( sourceEndPoints.start, sourceEndPoints.end ))
+                        (LineSegment2d.fromEndpoints ( source.axis.originPoint, sourceEndPoint ))
             in
             { point = mirrorPoint
             , distance = hitInfo.distance
@@ -1315,28 +1505,83 @@ reflect { windowSize, source, mirrors } =
     in
     case mirrors |> List.map addHitInfo |> List.sortBy distanceToStart |> List.Extra.find isHit of
         Nothing ->
-            [ sourceEndPoints.start, sourceEndPoints.end ]
+            [ source.axis.originPoint, sourceEndPoint ]
 
         Just nearestHitMirror ->
-            case
-                Axis2d.throughPoints nearestHitMirror.pointOnLine
-                    (nearestHitMirror.point |> Debug.todo "times (nearestHitMirror.distance |> divideBy reflectThreshold)")
-            of
+            case Vector2d.from nearestHitMirror.pointOnLine nearestHitMirror.point |> Vector2d.direction of
                 Nothing ->
-                    [ sourceEndPoints.start, nearestHitMirror.pointOnLine, sourceEndPoints.start ]
+                    [ source.axis.originPoint, nearestHitMirror.pointOnLine, source.axis.originPoint ]
 
-                Just reflectionAxis ->
-                    [ sourceEndPoints.start, nearestHitMirror.pointOnLine ]
+                Just reflectedDirection ->
+                    [ source.axis.originPoint, nearestHitMirror.pointOnLine ]
                         ++ reflect
                             { windowSize = windowSize
                             , source =
                                 { axis =
                                     { originPoint = nearestHitMirror.pointOnLine
-                                    , direction = reflectionAxis |> Axis2d.direction
+                                    , direction =
+                                        angleLerp
+                                            (source.axis.direction |> Direction2d.toAngle |> Angle.normalize)
+                                            (reflectedDirection |> Direction2d.toAngle |> Angle.normalize)
+                                            ((nearestHitMirror.distance |> Pixels.toFloat)
+                                                / (reflectThreshold |> Pixels.toFloat)
+                                            )
+                                            |> Direction2d.fromAngle
                                     }
                                 }
                             , mirrors = mirrors |> List.filter (\mirror -> mirror /= nearestHitMirror.point)
                             }
+
+
+angleLerp : Angle -> Angle -> Float -> Angle
+angleLerp a b fraction =
+    degreesLerp (a |> Angle.inDegrees) (b |> Angle.inDegrees) fraction
+        |> Angle.degrees
+
+
+degreesLerp : Float -> Float -> Float -> Float
+degreesLerp a b fraction =
+    if abs (b - a) > 180 then
+        if b > a then
+            degreesLerp (a + 360) b fraction
+
+        else
+            degreesLerp a (b + 360) fraction
+
+    else
+        (a + ((b - a) * fraction))
+            |> floatModBy 360
+
+
+floatModBy : Int -> Float -> Float
+floatModBy divisor =
+    \float ->
+        let
+            floatTruncated =
+                truncate float
+
+            floatUntruncated =
+                float - (floatTruncated |> toFloat)
+        in
+        (floatTruncated |> modBy divisor |> toFloat) + floatUntruncated
+
+
+isLeftOfLineSegment :
+    LineSegment2d Pixels Float
+    -> Point2d Pixels Float
+    -> Bool
+isLeftOfLineSegment lineSegment point =
+    let
+        a =
+            lineSegment |> LineSegment2d.startPoint |> Point2d.toRecord Pixels.toFloat
+
+        b =
+            lineSegment |> LineSegment2d.endPoint |> Point2d.toRecord Pixels.toFloat
+
+        c =
+            point |> Point2d.toRecord Pixels.toFloat
+    in
+    ((b.x - a.x) * (c.y - a.y) - (b.y - a.y) * (c.x - a.x)) > 0
 
 
 onLineSegment2dClosestTo :
@@ -1347,52 +1592,56 @@ onLineSegment2dClosestTo :
         , pointOnLine : Point2d Pixels Float
         }
 onLineSegment2dClosestTo point lineSegment =
-    let
-        distance =
-            let
-                startToPoint : Vector2d Pixels Float
-                startToPoint =
-                    Vector2d.from (lineSegment |> LineSegment2d.startPoint) point
+    if point |> isLeftOfLineSegment lineSegment then
+        onLineSegment2dClosestTo point (LineSegment2d.from (lineSegment |> LineSegment2d.endPoint) (lineSegment |> LineSegment2d.startPoint))
 
-                lineSegmentVector : Vector2d Pixels Float
-                lineSegmentVector =
-                    Vector2d.from (lineSegment |> LineSegment2d.startPoint) (lineSegment |> LineSegment2d.endPoint)
+    else
+        let
+            distance =
+                let
+                    startToPoint : Vector2d Pixels Float
+                    startToPoint =
+                        Vector2d.from (lineSegment |> LineSegment2d.startPoint) point
 
-                fractionAlongLineSegment =
-                    (startToPoint |> Vector2d.xComponent)
-                        |> Quantity.times (lineSegmentVector |> Vector2d.xComponent)
-                        |> Quantity.plus
-                            ((startToPoint |> Vector2d.yComponent)
-                                |> Quantity.times (lineSegmentVector |> Vector2d.yComponent)
-                            )
-                        |> Quantity.over (lineSegmentVector |> vector2dLengthSquared)
-                        |> Quantity.clamp (Pixels.float 0) (Pixels.float 1)
+                    lineSegmentVector : Vector2d Pixels Float
+                    lineSegmentVector =
+                        Vector2d.from (lineSegment |> LineSegment2d.startPoint) (lineSegment |> LineSegment2d.endPoint)
 
-                lineSegmentFraction : Vector2d Pixels Float
-                lineSegmentFraction =
-                    lineSegmentVector |> Vector2d.scaleBy (fractionAlongLineSegment |> Pixels.toFloat)
+                    fractionAlongLineSegment =
+                        (startToPoint |> Vector2d.xComponent)
+                            |> Quantity.times (lineSegmentVector |> Vector2d.xComponent)
+                            |> Quantity.plus
+                                ((startToPoint |> Vector2d.yComponent)
+                                    |> Quantity.times (lineSegmentVector |> Vector2d.yComponent)
+                                )
+                            |> Quantity.over (lineSegmentVector |> vector2dLengthSquared)
+                            |> Quantity.clamp (Pixels.float 0) (Pixels.float 1)
 
-                fractionEndPoint : Point2d Pixels Float
-                fractionEndPoint =
-                    lineSegment |> LineSegment2d.startPoint |> Point2d.translateBy lineSegmentFraction
+                    lineSegmentFraction : Vector2d Pixels Float
+                    lineSegmentFraction =
+                        lineSegmentVector |> Vector2d.scaleBy (fractionAlongLineSegment |> Pixels.toFloat)
 
-                distanceVector : Vector2d Pixels Float
-                distanceVector =
-                    Vector2d.from fractionEndPoint point
-            in
-            distanceVector |> Vector2d.length
-    in
-    { distance = distance
-    , pointOnLine =
-        point
-            |> Point2d.translateBy
-                (Vector2d.withLength distance
-                    (lineSegment
-                        |> LineSegment2d.perpendicularDirection
-                        |> Maybe.withDefault (Direction2d.fromAngle (Angle.turns 0.25))
+                    fractionEndPoint : Point2d Pixels Float
+                    fractionEndPoint =
+                        lineSegment |> LineSegment2d.startPoint |> Point2d.translateBy lineSegmentFraction
+
+                    distanceVector : Vector2d Pixels Float
+                    distanceVector =
+                        Vector2d.from fractionEndPoint point
+                in
+                distanceVector |> Vector2d.length
+        in
+        { distance = distance
+        , pointOnLine =
+            point
+                |> Point2d.translateBy
+                    (Vector2d.withLength distance
+                        (lineSegment
+                            |> LineSegment2d.perpendicularDirection
+                            |> Maybe.withDefault (Direction2d.fromAngle (Angle.turns 0.25))
+                        )
                     )
-                )
-    }
+        }
 
 
 vector2dLengthSquared : Vector2d Pixels Float -> Quantity Float Pixels
