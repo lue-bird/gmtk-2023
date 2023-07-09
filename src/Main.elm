@@ -129,6 +129,7 @@ type alias GameState =
         , lightRays : List LightRay
         , darknessRays : List LightRay
         , darknessBlobs : List DarknessBlob
+        , cavePasses : List CavePass
         , camera : Frame2d Pixels Float { defines : Float }
         , scrollYSpeed : Quantity Float (Rate Pixels Seconds)
         , highest : Quantity Float Pixels
@@ -137,6 +138,13 @@ type alias GameState =
         , lastTick : Time.Posix
         , initialTime : Time.Posix
         }
+
+
+type alias CavePass =
+    { point : Point2d Pixels Float
+    , widthPercent : Quantity Float Pixels
+    , heightPercent : Quantity Float Pixels
+    }
 
 
 type alias DarknessBlob =
@@ -324,6 +332,12 @@ initGame =
                     { originPoint = Point2d.fromRecord Pixels.float { x = -1000, y = 500 }
                     , direction = Direction2d.fromAngle (Angle.turns -0.02)
                     }
+              }
+            ]
+        , cavePasses =
+            [ { point = Point2d.fromRecord Pixels.float { x = -600, y = 1500 }
+              , widthPercent = Pixels.float 8
+              , heightPercent = Pixels.float 35
               }
             ]
         , darknessRays =
@@ -533,18 +547,20 @@ gameReactTo event =
 
                     ( generated, newSeed ) =
                         Random.step
-                            (Random.map4
-                                (\plantProgressed newLightRay newDarknessRay newDarknessBlob ->
+                            (Random.map5
+                                (\plantProgressed newLightRay newDarknessRay newDarknessBlob newCavePass ->
                                     { plantProgressed = plantProgressed
                                     , newLightRay = newLightRay
                                     , newDarknessRay = newDarknessRay
                                     , newDarknessBlob = newDarknessBlob
+                                    , newCavePass = newCavePass
                                     }
                                 )
                                 (state.plant |> plantProgress { height = 0, basePoint = Point2d.origin })
                                 (newRayRandom state.lightRays)
                                 (newRayRandom state.darknessRays)
                                 newDarknessBlobsRandom
+                                newCavePassRandom
                             )
                             state.randomSeed
 
@@ -734,7 +750,28 @@ gameReactTo event =
                                 else
                                     Random.constant Nothing
 
-                    -- ? TODO add sounds for blossoms
+                    newCavePassRandom =
+                        case state.cavePasses of
+                            [] ->
+                                -- shouldn't happen
+                                Random.constant Nothing
+
+                            highestCavePass :: _ ->
+                                if
+                                    (highestCavePass |> .point |> Point2d.yCoordinate)
+                                        |> Quantity.lessThan
+                                            ((state.camera |> Frame2d.originPoint |> Point2d.yCoordinate)
+                                                |> Quantity.plus (Pixels.float state.windowSize.height)
+                                            )
+                                then
+                                    Random.map Just
+                                        (cavePassRandomAbove
+                                            (highestCavePass |> .point |> Point2d.yCoordinate |> Pixels.toFloat)
+                                            state
+                                        )
+
+                                else
+                                    Random.constant Nothing
                 in
                 Reaction.to
                     ({ state
@@ -745,6 +782,8 @@ gameReactTo event =
                                 (generated.plantProgressed |> plantHeight)
                         , lightRays =
                             state.lightRays |> consJust generated.newLightRay
+                        , cavePasses =
+                            state.cavePasses |> consJust generated.newCavePass
                         , darknessRays =
                             state.darknessRays |> consJust generated.newDarknessRay
                         , darknessBlobs = state.darknessBlobs |> consJust generated.newDarknessBlob
@@ -1043,7 +1082,7 @@ darknessBlobRandomAbove currentHighestBlobY state =
             currentHighestBlobY ^ -0.35
 
         yDistanceRandom =
-            Random.float (10000 * distanceFactor) (13000 * distanceFactor)
+            Random.float (7000 * distanceFactor) (10000 * distanceFactor)
     in
     Random.map3
         (\x y r ->
@@ -1054,7 +1093,27 @@ darknessBlobRandomAbove currentHighestBlobY state =
         )
         (Random.float (-state.windowSize.width / 2 - 50) (state.windowSize.width / 2 + 50))
         yDistanceRandom
-        (Random.float 20 120)
+        (Random.float 20 180)
+
+
+cavePassRandomAbove :
+    Float
+    -> { state_ | windowSize : { width : Float, height : Float } }
+    -> Random.Generator CavePass
+cavePassRandomAbove currentHighestBlobY state =
+    Random.map4
+        (\x y widthPercent heightPercent ->
+            { point =
+                Point2d.fromRecord Pixels.float
+                    { x = x, y = currentHighestBlobY + y }
+            , widthPercent = Pixels.float widthPercent
+            , heightPercent = Pixels.float heightPercent
+            }
+        )
+        (Random.float (-state.windowSize.width / 2 - 50) (state.windowSize.width / 2 + 50))
+        (Random.float 350 750)
+        (Random.float 5 20)
+        (Random.float 5 80)
 
 
 uiDocument : State -> Browser.Document Event
@@ -1074,7 +1133,7 @@ ui =
                 menuState
                     |> menuUi
                     |> Ui.layout
-                        [ UiBackground.color (Ui.rgb 0 0 0)
+                        [ UiBackground.color (backgroundColor |> colorToUi)
                         , UiFont.color (Ui.rgb 1 1 1)
                         ]
                     |> Html.map (Menu >> Specific)
@@ -1092,6 +1151,24 @@ ui =
                     ]
                     [ Svg.defs []
                         [ Svg.filter [ SvgA.id "fog" ]
+                            [ TypedSvg.Filters.turbulence
+                                [ TypedSvg.Filters.Attributes.baseFrequency 0.012 0.02
+                                , TypedSvg.Filters.Attributes.numOctaves 2
+                                , TypedSvg.Filters.Attributes.seed 1
+                                , TypedSvg.Core.attribute "stitchTiles" "stitch"
+                                , TypedSvg.Filters.Attributes.result "turbulence"
+                                ]
+                                []
+                            , TypedSvg.Filters.displacementMap
+                                [ TypedSvg.Filters.Attributes.in_ Svg.InSourceGraphic
+                                , TypedSvg.Filters.Attributes.in2 (Svg.InReference "turbulence")
+                                , TypedSvg.Filters.Attributes.scale 50
+                                , TypedSvg.Core.attribute "xChannelSelector" "R"
+                                , TypedSvg.Core.attribute "yChannelSelector" "G"
+                                ]
+                                []
+                            ]
+                        , Svg.filter [ SvgA.id "darkness" ]
                             [ TypedSvg.Filters.turbulence
                                 [ TypedSvg.Filters.Attributes.baseFrequency 0.012 0.02
                                 , TypedSvg.Filters.Attributes.numOctaves 2
@@ -1127,29 +1204,29 @@ ui =
                                 ]
                                 []
                             ]
-                        , TypedSvg.Filters.gaussianBlur
-                            [ SvgA.id "blur"
-                            , TypedSvg.Filters.Attributes.in_ Svg.InSourceGraphic
-                            , SvgA.stdDeviation "15"
-                            ]
-                            []
                         , Svg.radialGradient
-                            [ SvgA.id "vignette"
+                            [ SvgA.id "background"
                             , SvgA.r (Svg.percent 150)
                             ]
                             [ Svg.stop
                                 [ SvgA.offset "37%"
-                                , SvgA.stopColor "#000000"
-                                , SvgA.stopOpacity (Svg.Opacity 0)
+                                , SvgA.stopColor (backgroundColor |> Color.toCssString)
                                 ]
                                 []
                             , Svg.stop
                                 [ SvgA.offset "100%"
-                                , SvgA.stopColor "#000000"
-                                , SvgA.stopOpacity (Svg.Opacity 0.7)
+                                , SvgA.stopColor (backgroundColor |> withAlpha 0.4 |> Color.toCssString)
                                 ]
                                 []
                             ]
+                        , TypedSvg.Filters.gaussianBlur
+                            [ SvgA.id "blur"
+                            , SvgA.x (Svg.px 0)
+                            , SvgA.y (Svg.px 0)
+                            , TypedSvg.Filters.Attributes.in_ Svg.InSourceGraphic
+                            , SvgA.stdDeviation "15"
+                            ]
+                            []
                         ]
                     , backgroundUi
                     , [ gameState |> worldUi ]
@@ -1181,7 +1258,7 @@ menuUi =
             ]
             [ UiInput.button
                 [ Ui.paddingXY 50 30
-                , UiBackground.color (accentColor |> colorToUi)
+                , UiBackground.color (Ui.rgb 0 0 0)
                 , UiBorder.rounded 1000
                 , Ui.width Ui.fill
                 ]
@@ -1196,10 +1273,103 @@ menuUi =
             ]
 
 
+lowCavePasses : Svg event_
+lowCavePasses =
+    [ Svg.ellipse
+        [ SvgA.rx (Svg.percent 10)
+        , SvgA.ry (Svg.percent 100)
+        , SvgA.cx (Svg.percent 50)
+        , SvgA.cy (Svg.percent -10)
+        , SvgA.fill (Svg.Paint (Color.rgba 1 1 1 0.03))
+        , SvgA.filter (Svg.Filter "url(#fog)")
+        ]
+        []
+    , Svg.ellipse
+        [ SvgA.rx (Svg.percent 20)
+        , SvgA.ry (Svg.percent 100)
+        , SvgA.cx (Svg.percent 0)
+        , SvgA.fill (Svg.Paint (Color.rgba 1 1 1 0.07))
+        , SvgA.filter (Svg.Filter "url(#fog)")
+
+        -- , SvgA.filter (Svg.Filter "url(#blur)")
+        ]
+        []
+    , Svg.ellipse
+        [ SvgA.rx (Svg.percent 10)
+        , SvgA.ry (Svg.percent 40)
+        , SvgA.cx (Svg.percent 0)
+        , SvgA.fill (Svg.Paint (Color.rgba 1 1 1 0.14))
+        , SvgA.filter (Svg.Filter "url(#fog)")
+        ]
+        []
+    ]
+        |> Svg.g []
+
+
+lore : List String
+lore =
+    [ "hello, hello, light"
+    , "I was waiting ----- for you"
+    , "since #### you left"
+    , "it has been so ##\"\"##"
+    , "cold"
+    , "I saved these flowers for you *"
+    , "do you know ###"
+    , "what outside is?"
+    , "Can you show &&%$ me?"
+    , "What"
+    , "What is not darkness"
+    , "[there's not much beyond, quit if you like]"
+    , "Was that you, warm light?"
+    , "Or was it time"
+    , "i don't understand it"
+    , "time."
+    , "nothing has changed ever, what does time do??"
+    , "Maybe time means you are closer here."
+    , "Found my message up?"
+    , "And did you see my flowers on the pit?"
+    , "Was there always a pass here?"
+    , "Wanna go through?"
+    ]
+
+
+loreUi : Svg event_
+loreUi =
+    lore
+        |> List.foldl
+            (\snippet soFar ->
+                { uis =
+                    soFar.uis
+                        |> (::)
+                            (Svg.text_
+                                [ SvgA.x (Svg.percent (soFar.newX - 50))
+                                , SvgA.y (Svg.percent -soFar.newY)
+                                , SvgA.fontSize (Svg.percent 130)
+                                , SvgA.fontWeight Svg.FontWeightLighter
+                                , SvgA.opacity (Svg.Opacity 0.5)
+                                , SvgA.textAnchor Svg.AnchorMiddle
+                                , SvgA.fontFamily [ "monospace" ]
+                                , SvgA.fill (Svg.Paint (Color.rgb 1 1 1))
+                                , SvgA.transform [ Svg.Scale 1 -1 ]
+                                ]
+                                [ TypedSvg.Core.text snippet
+                                ]
+                            )
+                , newX = 20 + ((soFar.newX + 20) * 2 |> floatModBy 60)
+                , newY = soFar.newY + 10 + (soFar.newX * 0.5)
+                }
+            )
+            { newX = 40, newY = 140, uis = [] }
+        |> .uis
+        |> List.reverse
+        |> Svg.g []
+
+
 worldUi :
     { state_
         | plant : Plant
         , lightRays : List LightRay
+        , cavePasses : List CavePass
         , darknessRays : List LightRay
         , darknessBlobs : List DarknessBlob
         , blossomSnappedToMouse : Maybe FreeBlossom
@@ -1214,54 +1384,42 @@ worldUi =
             [ SvgA.transform
                 (state.camera |> cameraToTransform)
             ]
-            (Svg.ellipse
-                [ SvgA.rx (Svg.percent 10)
-                , SvgA.ry (Svg.percent 100)
-                , SvgA.cx (Svg.percent 50)
-                , SvgA.cy (Svg.percent -10)
-                , SvgA.fill (Svg.Paint (Color.rgba 1 1 1 0.03))
-                , SvgA.filter (Svg.Filter "url(#fog)")
-                ]
-                []
-                :: Svg.ellipse
-                    [ SvgA.rx (Svg.percent 20)
-                    , SvgA.ry (Svg.percent 100)
-                    , SvgA.cx (Svg.percent 0)
-                    , SvgA.fill (Svg.Paint (Color.rgba 1 1 1 0.07))
-                    , SvgA.filter (Svg.Filter "url(#fog)")
-
-                    -- , SvgA.filter (Svg.Filter "url(#blur)")
-                    ]
-                    []
-                :: Svg.ellipse
-                    [ SvgA.rx (Svg.percent 10)
-                    , SvgA.ry (Svg.percent 40)
-                    , SvgA.cx (Svg.percent 0)
-                    , SvgA.fill (Svg.Paint (Color.rgba 1 1 1 0.14))
-                    , SvgA.filter (Svg.Filter "url(#fog)")
-                    ]
-                    []
-                :: groundUi
-                :: (state.lightRays
-                        |> List.map
-                            (\lightRay ->
-                                lightRay |> lightRayUi state
-                            )
-                   )
-                ++ (state.darknessRays
-                        |> List.map
-                            (\darknessRay ->
-                                darknessRay |> darknessRayUi state
-                            )
-                   )
-                ++ (state.darknessBlobs |> List.map darknessBlobUi)
-                ++ [ state.plant |> plantWithoutBlossomsUi, state.plant |> plantBlossomsOnlyUi ]
-                ++ (state.freeBlossoms
-                        |> List.indexedMap
-                            (\i freeBlossom ->
-                                freeBlossom |> freeBlossomUi [ TypedSvg.Events.onMouseDown (FreeBlossomPressed i) ]
-                            )
-                   )
+            ([ lowCavePasses
+             , groundUi
+             , state.cavePasses
+                |> Svg.Lazy.lazy
+                    (\passes ->
+                        passes |> List.map cavePassUi |> Svg.g []
+                    )
+             , loreUi
+             , state.lightRays
+                |> List.map
+                    (\lightRay ->
+                        lightRay |> lightRayUi state
+                    )
+                |> Svg.g []
+             , state.plant |> plantWithoutBlossomsUi
+             , state.plant |> plantBlossomsOnlyUi
+             , state.darknessRays
+                |> List.map
+                    (\darknessRay ->
+                        darknessRay |> darknessRayUi state
+                    )
+                |> Svg.g []
+             , state.darknessBlobs
+                |> Svg.Lazy.lazy (\blobs -> blobs |> List.map darknessBlobUi |> Svg.g [])
+             , state.freeBlossoms
+                |> Svg.Lazy.lazy
+                    (\frees ->
+                        frees
+                            |> List.indexedMap
+                                (\i freeBlossom ->
+                                    freeBlossom
+                                        |> freeBlossomUi [ TypedSvg.Events.onMouseDown (FreeBlossomPressed i) ]
+                                )
+                            |> Svg.g []
+                    )
+             ]
                 ++ (case state.blossomSnappedToMouse of
                         Nothing ->
                             []
@@ -1433,6 +1591,26 @@ groundUi =
         |> Svg.g []
 
 
+cavePassUi : CavePass -> Svg event_
+cavePassUi =
+    Svg.Lazy.lazy
+        (\cavePass ->
+            let
+                ( x, y ) =
+                    cavePass |> .point |> Point2d.toTuple Pixels.toFloat
+            in
+            Svg.ellipse
+                [ SvgA.rx (Svg.percent 10)
+                , SvgA.ry (Svg.percent 40)
+                , SvgA.cx (Svg.px x)
+                , SvgA.cy (Svg.px y)
+                , SvgA.fill (Svg.Paint (Color.rgba 1 1 1 0.03))
+                , SvgA.filter (Svg.Filter "url(#fog)")
+                ]
+                []
+        )
+
+
 plantWithoutBlossomsUi : Plant -> Svg event_
 plantWithoutBlossomsUi =
     \plant ->
@@ -1471,7 +1649,7 @@ plantSegmentUi =
                 , SvgA.x2 (Svg.px x2)
                 , SvgA.y2 (Svg.px y2)
                 , SvgA.stroke (Svg.Paint label.color)
-                , SvgA.strokeWidth (Svg.px 30)
+                , SvgA.strokeWidth (Svg.px 13)
                 , SvgA.strokeLinecap Svg.StrokeLinecapRound
                 ]
                 []
@@ -1519,7 +1697,7 @@ plantBlossomsOnlyUiFrom path =
 
 blossomRadius : Quantity Float Pixels
 blossomRadius =
-    lightRayRadius |> Quantity.multiplyBy 0.5
+    lightRayRadius |> Quantity.multiplyBy 0.3
 
 
 blossomUi : TreePath -> Blossom -> Svg GameEvent
@@ -1590,27 +1768,19 @@ pointToTranslateTransform =
             (point |> Point2d.yCoordinate |> Pixels.toFloat)
 
 
-accentColor : Color
-accentColor =
-    Color.rgb 0.05 0.2 0.5
+backgroundColor : Color
+backgroundColor =
+    Color.rgb 0.03 0.05 0.2
 
 
 backgroundUi : Svg event_
 backgroundUi =
-    [ Svg.rect
+    Svg.rect
         [ SvgA.width (Svg.percent 100)
         , SvgA.height (Svg.percent 100)
-        , SvgA.fill (Svg.Paint accentColor)
+        , SvgA.fill (Svg.Reference "url(#background)")
         ]
         []
-    , Svg.g
-        [ SvgA.width (Svg.percent 100)
-        , SvgA.height (Svg.percent 100)
-        , SvgA.filter (Svg.Filter "url(#vignette)")
-        ]
-        []
-    ]
-        |> Svg.g []
 
 
 scoreUi :
@@ -1658,7 +1828,7 @@ scoreUi =
 
 lightRayRadius : Quantity Float Pixels
 lightRayRadius =
-    Pixels.float 26
+    Pixels.float 40
 
 
 axisToEndPointsInWidth width axis =
@@ -1718,15 +1888,6 @@ lightRayUi state =
             , SvgA.strokeLinejoin Svg.StrokeLinejoinRound
             ]
             []
-        , Svg.polyline
-            [ SvgA.points
-                lightRayInScreen
-            , SvgA.stroke (Svg.Paint (lightRayColor |> withAlpha 0.02))
-            , SvgA.strokeWidth (Svg.px (lightRayRadius |> Quantity.multiplyBy 15 |> Pixels.toFloat))
-            , SvgA.fill (Svg.Paint (Color.rgba 0 0 0 0))
-            , SvgA.strokeLinejoin Svg.StrokeLinejoinRound
-            ]
-            []
         ]
             |> Svg.g []
 
@@ -1758,10 +1919,10 @@ darknessRayUi state =
             [ SvgA.points
                 lightRayInScreen
             , SvgA.stroke (Svg.Paint (Color.rgb 0 0 0))
-            , SvgA.strokeWidth (Svg.px (lightRayRadius |> Quantity.twice |> Pixels.toFloat))
+            , SvgA.strokeWidth (Svg.px (lightRayRadius |> Quantity.multiplyBy 6 |> Pixels.toFloat))
             , SvgA.fill (Svg.Paint (Color.rgba 0 0 0 0))
             , SvgA.strokeLinejoin Svg.StrokeLinejoinRound
-            , SvgA.filter (Svg.Filter "url(#fog)")
+            , SvgA.filter (Svg.Filter "url(#darkness)")
             ]
             []
         ]
@@ -1784,7 +1945,7 @@ darknessBlobUi =
                 , SvgA.cy (Svg.px y)
                 , SvgA.fill (Svg.Paint (Color.rgb 0 0 0))
                 , SvgA.r (Svg.px (r |> Pixels.toFloat))
-                , SvgA.filter (Svg.Filter "url(#fog)")
+                , SvgA.filter (Svg.Filter "url(#darkness)")
                 ]
                 []
             ]
@@ -1928,7 +2089,7 @@ untilWindowBounds windowSize =
 
 reflectThreshold : Quantity Float Pixels
 reflectThreshold =
-    lightRayRadius |> Quantity.plus (blossomRadius |> Quantity.multiplyBy 1.45)
+    lightRayRadius |> Quantity.plus (blossomRadius |> Quantity.multiplyBy 1.1)
 
 
 reflect :
