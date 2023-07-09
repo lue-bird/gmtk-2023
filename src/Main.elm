@@ -205,21 +205,30 @@ main =
 type AudioKind
     = AudioMirrorGrow
     | AudioMirrorPlace
+    | AudioMirrorGrab
     | AudioMusic
 
 
 audioKinds : List AudioKind
 audioKinds =
-    [ AudioMirrorGrow, AudioMirrorPlace, AudioMusic ]
+    [ AudioMirrorGrow, AudioMirrorPlace, AudioMirrorGrab, AudioMusic ]
 
 
 type alias EachAudio perKind =
-    { mirrorGrow : perKind, mirrorPlace : perKind, music : perKind }
+    { mirrorGrow : perKind
+    , mirrorPlace : perKind
+    , mirrorGrab : perKind
+    , music : perKind
+    }
 
 
 eachAudio : perKind -> EachAudio perKind
 eachAudio perKind =
-    { mirrorGrow = perKind, mirrorPlace = perKind, music = perKind }
+    { mirrorGrow = perKind
+    , mirrorPlace = perKind
+    , mirrorGrab = perKind
+    , music = perKind
+    }
 
 
 alterAudioOfKind : AudioKind -> (a -> a) -> EachAudio a -> EachAudio a
@@ -230,6 +239,9 @@ alterAudioOfKind kind f =
 
         AudioMirrorPlace ->
             \r -> { r | mirrorPlace = r.mirrorPlace |> f }
+
+        AudioMirrorGrab ->
+            \r -> { r | mirrorGrab = r.mirrorGrab |> f }
 
         AudioMusic ->
             \r -> { r | music = r.music |> f }
@@ -244,6 +256,9 @@ accessAudioOfKind kind =
         AudioMirrorPlace ->
             .mirrorPlace
 
+        AudioMirrorGrab ->
+            .mirrorGrab
+
         AudioMusic ->
             .music
 
@@ -257,6 +272,9 @@ audioPieceToName =
 
             AudioMirrorPlace ->
                 "mirror-place"
+
+            AudioMirrorGrab ->
+                "mirror-grab"
 
             AudioMusic ->
                 "music"
@@ -400,6 +418,8 @@ gameReactTo event =
                                     (\sub -> sub |> Tree.mapLabel (\segment -> { segment | blossom = Nothing }))
                         , blossomSnappedToMouse =
                             state.plant |> separateBlossomAt pathToSegmentWithBlossom
+                        , audioTimes =
+                            state.audioTimes |> (\r -> { r | mirrorGrab = r.mirrorGrab |> (::) state.lastTick })
                      }
                         |> Game
                     )
@@ -444,6 +464,8 @@ gameReactTo event =
                             ({ state
                                 | blossomSnappedToMouse = Nothing
                                 , freeBlossoms = blossomSnappedToMouse :: state.freeBlossoms
+                                , audioTimes =
+                                    state.audioTimes |> (\r -> { r | mirrorPlace = r.mirrorPlace |> (::) state.lastTick })
                              }
                                 |> Game
                             )
@@ -457,6 +479,8 @@ gameReactTo event =
                         , freeBlossoms =
                             state.freeBlossoms
                                 |> List.Extra.removeAt freeBlossomIndex
+                        , audioTimes =
+                            state.audioTimes |> (\r -> { r | mirrorGrab = r.mirrorGrab |> (::) state.lastTick })
                      }
                         |> Game
                     )
@@ -1434,7 +1458,7 @@ audio audioData =
                                             gameState.audioTimes
                                                 |> accessAudioOfKind audioKind
                                                 |> List.map
-                                                    (\time -> Audio.audio loadedAudio time)
+                                                    (\time -> Audio.audio loadedAudio (Duration.addTo time (Duration.seconds 0.07)))
                                                 |> Audio.group
                                         )
                                 )
