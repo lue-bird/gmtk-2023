@@ -17,7 +17,3 @@ and open the index.html file or better
 serve
 ```
   - [vercel/serve](https://github.com/vercel/serve)
-
-## TODO
-
-  - TODO diffuse light after a while and don't let affect growth infinitely

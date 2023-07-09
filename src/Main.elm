@@ -22,6 +22,7 @@ import File.Select
 import Forest.Path
 import Frame2d exposing (Frame2d)
 import Html exposing (Html)
+import Html.Attributes
 import Html.Events
 import Json.Decode
 import Json.Encode
@@ -127,6 +128,7 @@ type alias GameState =
         , freeBlossoms : List FreeBlossom
         , lightRays : List LightRay
         , darknessRays : List LightRay
+        , darknessBlobs : List DarknessBlob
         , camera : Frame2d Pixels Float { defines : Float }
         , scrollYSpeed : Quantity Float (Rate Pixels Seconds)
         , highest : Quantity Float Pixels
@@ -135,6 +137,10 @@ type alias GameState =
         , lastTick : Time.Posix
         , initialTime : Time.Posix
         }
+
+
+type alias DarknessBlob =
+    Circle2d Pixels Float
 
 
 type alias Plant =
@@ -326,6 +332,11 @@ initGame =
                     , direction = Direction2d.fromAngle (Angle.turns 0.48)
                     }
               }
+            ]
+        , darknessBlobs =
+            [ Circle2d.withRadius
+                (Pixels.float 90)
+                (Point2d.fromRecord Pixels.float { x = 600, y = 1700 })
             ]
         , camera = Frame2d.atPoint (Point2d.fromRecord Pixels.float { x = 0, y = -100 })
         , scrollYSpeed = Pixels.float 14 |> Quantity.per Duration.second
@@ -522,28 +533,49 @@ gameReactTo event =
 
                     ( generated, newSeed ) =
                         Random.step
-                            (Random.map3
-                                (\plantProgressed newLightRay newDarknessRay ->
+                            (Random.map4
+                                (\plantProgressed newLightRay newDarknessRay newDarknessBlob ->
                                     { plantProgressed = plantProgressed
                                     , newLightRay = newLightRay
                                     , newDarknessRay = newDarknessRay
+                                    , newDarknessBlob = newDarknessBlob
                                     }
                                 )
                                 (state.plant |> plantProgress { height = 0, basePoint = Point2d.origin })
                                 (newRayRandom state.lightRays)
                                 (newRayRandom state.darknessRays)
+                                newDarknessBlobsRandom
                             )
                             state.randomSeed
+
+                    mirrors =
+                        consJust state.blossomSnappedToMouse
+                            state.freeBlossoms
+                            |> List.map .point
 
                     lightRaySegments =
                         state.lightRays
                             |> List.concatMap
                                 (\lightRay ->
                                     reflect
-                                        { mirrors = state.freeBlossoms |> List.map .point
+                                        { mirrors = mirrors
                                         , source = lightRay
                                         , windowSize = state.windowSize
                                         }
+                                        |> untilLengthFrom 1760
+                                        |> pointsToSegments
+                                )
+
+                    darknessRaySegments =
+                        state.darknessRays
+                            |> List.concatMap
+                                (\lightRay ->
+                                    reflect
+                                        { mirrors = mirrors
+                                        , source = lightRay
+                                        , windowSize = state.windowSize
+                                        }
+                                        |> untilLengthFrom 1760
                                         |> pointsToSegments
                                 )
 
@@ -571,59 +603,94 @@ gameReactTo event =
                         -> Plant
                         -> Random.Generator Plant
                     plantProgress current plant =
-                        -- TODO randomly remove when darkness rays are hit
                         let
-                            lightProximity =
-                                lightRaySegments
-                                    |> List.map
+                            isHitByDarkness =
+                                isHitByDarknessBlob
+                                    || isHitByDarknessRays ()
+
+                            isHitByDarknessBlob =
+                                state.darknessBlobs
+                                    |> List.any
+                                        (\darknessBlob ->
+                                            darknessBlob |> Circle2d.contains current.basePoint
+                                        )
+
+                            isHitByDarknessRays () =
+                                darknessRaySegments
+                                    |> List.any
                                         (\lightRay ->
                                             let
                                                 closest =
                                                     onLineSegment2dClosestTo current.basePoint lightRay
                                             in
-                                            1
-                                                / (max equalLightEffectZone (closest.distance |> Pixels.toFloat) ^ 2)
+                                            closest.distance |> Quantity.lessThan lightRayRadius
                                         )
-                                    |> List.sum
-
-                            branchingPreference =
-                                case plantWidthByHeight |> Dict.get current.height of
-                                    Just 1 ->
-                                        1
-
-                                    Just 2 ->
-                                        0.2
-
-                                    _ ->
-                                        0.02
-
-                            endPoint =
-                                current.basePoint |> Point2d.translateBy (plant |> Tree.label |> .orientation)
                         in
-                        Random.map2
-                            (\newSub subs ->
-                                Tree.tree (plant |> Tree.label)
-                                    (subs |> consJust (Maybe.map Tree.singleton newSub))
-                            )
-                            (if (plantWidthByHeight |> Dict.get (current.height + 1) |> Maybe.withDefault 0) >= 10 then
-                                Random.constant Nothing
-
-                             else
-                                Random.Extra.frequency
-                                    ( 0.002, Random.constant Nothing )
-                                    [ ( lightProximity * branchingPreference
-                                      , Random.map Just plantSegmentRandom
-                                      )
-                                    ]
-                            )
-                            (plant
-                                |> Tree.children
-                                |> List.map
-                                    (\sub ->
-                                        plantProgress { basePoint = endPoint, height = current.height + 1 } sub
+                        if isHitByDarkness then
+                            Random.constant
+                                (Tree.singleton
+                                    (plant
+                                        |> Tree.label
+                                        |> (\l -> { l | color = Color.rgb 0 0 0, blossom = Nothing })
                                     )
-                                |> Random.Extra.sequence
-                            )
+                                )
+
+                        else
+                            let
+                                lightProximity =
+                                    lightRaySegments
+                                        |> List.map
+                                            (\lightRay ->
+                                                let
+                                                    closest =
+                                                        onLineSegment2dClosestTo current.basePoint lightRay
+                                                in
+                                                1
+                                                    / (max (lightRayRadius |> Pixels.toFloat)
+                                                        (closest.distance |> Pixels.toFloat)
+                                                        ^ 2
+                                                      )
+                                            )
+                                        |> List.sum
+
+                                branchingPreference =
+                                    case plantWidthByHeight |> Dict.get current.height of
+                                        Just 1 ->
+                                            1
+
+                                        Just 2 ->
+                                            0.2
+
+                                        _ ->
+                                            0.02
+
+                                endPoint =
+                                    current.basePoint |> Point2d.translateBy (plant |> Tree.label |> .orientation)
+                            in
+                            Random.map2
+                                (\newSub subs ->
+                                    Tree.tree (plant |> Tree.label)
+                                        (subs |> consJust (Maybe.map Tree.singleton newSub))
+                                )
+                                (if (plantWidthByHeight |> Dict.get (current.height + 1) |> Maybe.withDefault 0) >= 10 then
+                                    Random.constant Nothing
+
+                                 else
+                                    Random.Extra.frequency
+                                        ( 0.002, Random.constant Nothing )
+                                        [ ( lightProximity * branchingPreference
+                                          , Random.map Just plantSegmentRandom
+                                          )
+                                        ]
+                                )
+                                (plant
+                                    |> Tree.children
+                                    |> List.map
+                                        (\sub ->
+                                            plantProgress { basePoint = endPoint, height = current.height + 1 } sub
+                                        )
+                                    |> Random.Extra.sequence
+                                )
 
                     newRayRandom existingRays =
                         case existingRays of
@@ -644,6 +711,29 @@ gameReactTo event =
                                 else
                                     Random.constant Nothing
 
+                    newDarknessBlobsRandom =
+                        case state.darknessBlobs of
+                            [] ->
+                                -- shouldn't happen
+                                Random.constant Nothing
+
+                            highestDarknessBlob :: _ ->
+                                if
+                                    (highestDarknessBlob |> Circle2d.centerPoint |> Point2d.yCoordinate)
+                                        |> Quantity.lessThan
+                                            ((state.camera |> Frame2d.originPoint |> Point2d.yCoordinate)
+                                                |> Quantity.plus (Pixels.float state.windowSize.height)
+                                            )
+                                then
+                                    Random.map Just
+                                        (darknessBlobRandomAbove
+                                            (highestDarknessBlob |> Circle2d.centerPoint |> Point2d.yCoordinate |> Pixels.toFloat)
+                                            state
+                                        )
+
+                                else
+                                    Random.constant Nothing
+
                     -- ? TODO add sounds for blossoms
                 in
                 Reaction.to
@@ -657,6 +747,7 @@ gameReactTo event =
                             state.lightRays |> consJust generated.newLightRay
                         , darknessRays =
                             state.darknessRays |> consJust generated.newDarknessRay
+                        , darknessBlobs = state.darknessBlobs |> consJust generated.newDarknessBlob
                         , scrollYSpeed =
                             state.scrollYSpeed
                                 |> (if List.member Key.ArrowUp state.keysPressed || List.member Key.W state.keysPressed then
@@ -671,7 +762,7 @@ gameReactTo event =
                                     else
                                         identity
                                    )
-                                |> Quantity.multiplyBy (0.82 ^ (sinceLastTick |> Duration.inSeconds))
+                                |> Quantity.multiplyBy (0.78 ^ (sinceLastTick |> Duration.inSeconds))
                         , camera =
                             state.camera
                                 |> Frame2d.translateBy
@@ -721,11 +812,6 @@ subscriptions =
                 ]
                     |> Sub.batch
                     |> Sub.map (Game >> Specific)
-
-
-equalLightEffectZone : Float
-equalLightEffectZone =
-    1.5 * (lightRayRadius |> Pixels.toFloat)
 
 
 port audioPortToJS : Json.Encode.Value -> Cmd msg_
@@ -947,6 +1033,30 @@ lightRayRandomAbove currentHighestLightY state =
     Random.Extra.frequency ( 1, lightRayFromLeftRandom ) [ ( 1, lightRayFromRightRandom ) ]
 
 
+darknessBlobRandomAbove :
+    Float
+    -> { state_ | windowSize : { width : Float, height : Float } }
+    -> Random.Generator DarknessBlob
+darknessBlobRandomAbove currentHighestBlobY state =
+    let
+        distanceFactor =
+            currentHighestBlobY ^ -0.35
+
+        yDistanceRandom =
+            Random.float (10000 * distanceFactor) (13000 * distanceFactor)
+    in
+    Random.map3
+        (\x y r ->
+            Circle2d.withRadius (Pixels.float r)
+                (Point2d.fromRecord Pixels.float
+                    { x = x, y = currentHighestBlobY + y }
+                )
+        )
+        (Random.float (-state.windowSize.width / 2 - 50) (state.windowSize.width / 2 + 50))
+        yDistanceRandom
+        (Random.float 20 120)
+
+
 uiDocument : State -> Browser.Document Event
 uiDocument =
     \state ->
@@ -980,7 +1090,68 @@ ui =
                         )
                     , TypedSvg.Events.onMouseUp MouseReleased
                     ]
-                    [ backgroundUi
+                    [ Svg.defs []
+                        [ Svg.filter [ SvgA.id "fog" ]
+                            [ TypedSvg.Filters.turbulence
+                                [ TypedSvg.Filters.Attributes.baseFrequency 0.012 0.02
+                                , TypedSvg.Filters.Attributes.numOctaves 2
+                                , TypedSvg.Filters.Attributes.seed 1
+                                , TypedSvg.Core.attribute "stitchTiles" "stitch"
+                                , TypedSvg.Filters.Attributes.result "turbulence"
+                                ]
+                                []
+                            , TypedSvg.Filters.displacementMap
+                                [ TypedSvg.Filters.Attributes.in_ Svg.InSourceGraphic
+                                , TypedSvg.Filters.Attributes.in2 (Svg.InReference "turbulence")
+                                , TypedSvg.Filters.Attributes.scale 50
+                                , TypedSvg.Core.attribute "xChannelSelector" "R"
+                                , TypedSvg.Core.attribute "yChannelSelector" "G"
+                                ]
+                                []
+                            ]
+                        , Svg.filter [ SvgA.id "dirt" ]
+                            [ TypedSvg.Filters.turbulence
+                                [ TypedSvg.Filters.Attributes.baseFrequency 0.01 0.02
+                                , TypedSvg.Filters.Attributes.numOctaves 2
+                                , TypedSvg.Filters.Attributes.seed 1
+                                , TypedSvg.Core.attribute "stitchTiles" "stitch"
+                                , TypedSvg.Filters.Attributes.result "turbulence"
+                                ]
+                                []
+                            , TypedSvg.Filters.displacementMap
+                                [ TypedSvg.Filters.Attributes.in_ Svg.InSourceGraphic
+                                , TypedSvg.Filters.Attributes.in2 (Svg.InReference "turbulence")
+                                , TypedSvg.Filters.Attributes.scale 20
+                                , TypedSvg.Core.attribute "xChannelSelector" "R"
+                                , TypedSvg.Core.attribute "yChannelSelector" "G"
+                                ]
+                                []
+                            ]
+                        , TypedSvg.Filters.gaussianBlur
+                            [ SvgA.id "blur"
+                            , TypedSvg.Filters.Attributes.in_ Svg.InSourceGraphic
+                            , SvgA.stdDeviation "15"
+                            ]
+                            []
+                        , Svg.radialGradient
+                            [ SvgA.id "vignette"
+                            , SvgA.r (Svg.percent 150)
+                            ]
+                            [ Svg.stop
+                                [ SvgA.offset "37%"
+                                , SvgA.stopColor "#000000"
+                                , SvgA.stopOpacity (Svg.Opacity 0)
+                                ]
+                                []
+                            , Svg.stop
+                                [ SvgA.offset "100%"
+                                , SvgA.stopColor "#000000"
+                                , SvgA.stopOpacity (Svg.Opacity 0.7)
+                                ]
+                                []
+                            ]
+                        ]
+                    , backgroundUi
                     , [ gameState |> worldUi ]
                         |> Svg.g
                             [ SvgA.transform
@@ -1015,7 +1186,12 @@ menuUi =
                 , Ui.width Ui.fill
                 ]
                 { onPress = GameStartClicked |> Just
-                , label = Ui.text "play" |> Ui.el [ Ui.centerX ]
+                , label =
+                    Ui.text "🌼"
+                        |> Ui.el
+                            [ Ui.centerX
+                            , Html.Attributes.style "transform" "scale(-1, -1)" |> Ui.htmlAttribute
+                            ]
                 }
             ]
 
@@ -1025,6 +1201,7 @@ worldUi :
         | plant : Plant
         , lightRays : List LightRay
         , darknessRays : List LightRay
+        , darknessBlobs : List DarknessBlob
         , blossomSnappedToMouse : Maybe FreeBlossom
         , freeBlossoms : List FreeBlossom
         , camera : Frame2d Pixels Float { defines : Float }
@@ -1037,9 +1214,47 @@ worldUi =
             [ SvgA.transform
                 (state.camera |> cameraToTransform)
             ]
-            (groundUi
-                :: (state.lightRays |> List.map (lightRayUi (Color.rgb 1 0.9 0.8) state))
-                ++ (state.darknessRays |> List.map (lightRayUi (Color.rgb 0 0 0) state))
+            (Svg.ellipse
+                [ SvgA.rx (Svg.percent 10)
+                , SvgA.ry (Svg.percent 100)
+                , SvgA.cx (Svg.percent 50)
+                , SvgA.cy (Svg.percent -10)
+                , SvgA.fill (Svg.Paint (Color.rgba 1 1 1 0.03))
+                , SvgA.filter (Svg.Filter "url(#fog)")
+                ]
+                []
+                :: Svg.ellipse
+                    [ SvgA.rx (Svg.percent 20)
+                    , SvgA.ry (Svg.percent 100)
+                    , SvgA.cx (Svg.percent 0)
+                    , SvgA.fill (Svg.Paint (Color.rgba 1 1 1 0.07))
+                    , SvgA.filter (Svg.Filter "url(#fog)")
+
+                    -- , SvgA.filter (Svg.Filter "url(#blur)")
+                    ]
+                    []
+                :: Svg.ellipse
+                    [ SvgA.rx (Svg.percent 10)
+                    , SvgA.ry (Svg.percent 40)
+                    , SvgA.cx (Svg.percent 0)
+                    , SvgA.fill (Svg.Paint (Color.rgba 1 1 1 0.14))
+                    , SvgA.filter (Svg.Filter "url(#fog)")
+                    ]
+                    []
+                :: groundUi
+                :: (state.lightRays
+                        |> List.map
+                            (\lightRay ->
+                                lightRay |> lightRayUi (Color.rgb 1 0.9 0.8) state
+                            )
+                   )
+                ++ (state.darknessRays
+                        |> List.map
+                            (\darknessRay ->
+                                darknessRay |> lightRayUi (Color.rgb 0 0 0) state
+                            )
+                   )
+                ++ (state.darknessBlobs |> List.map darknessBlobUi)
                 ++ [ state.plant |> plantWithoutBlossomsUi, state.plant |> plantBlossomsOnlyUi ]
                 ++ (state.freeBlossoms
                         |> List.indexedMap
@@ -1063,6 +1278,7 @@ groundUi =
         , SvgA.ry (Svg.px 100)
         , SvgA.cy (Svg.px -100)
         , SvgA.fill (Svg.Paint (Color.rgb 0.3 0.1 0))
+        , SvgA.filter (Svg.Filter "url(#dirt)")
         ]
         []
     , Svg.ellipse
@@ -1070,7 +1286,8 @@ groundUi =
         , SvgA.ry (Svg.px 230)
         , SvgA.cy (Svg.px -210)
         , SvgA.cx (Svg.px -210)
-        , SvgA.fill (Svg.Paint (Color.rgb 0.25 0.13 0))
+        , SvgA.fill (Svg.Paint (Color.rgb 0.18 0.07 0))
+        , SvgA.filter (Svg.Filter "url(#dirt)")
         ]
         []
     , plantWithoutBlossomsUi
@@ -1380,12 +1597,20 @@ accentColor =
 
 backgroundUi : Svg event_
 backgroundUi =
-    Svg.rect
+    [ Svg.rect
         [ SvgA.width (Svg.percent 100)
         , SvgA.height (Svg.percent 100)
         , SvgA.fill (Svg.Paint accentColor)
         ]
         []
+    , Svg.g
+        [ SvgA.width (Svg.percent 100)
+        , SvgA.height (Svg.percent 100)
+        , SvgA.filter (Svg.Filter "url(#vignette)")
+        ]
+        []
+    ]
+        |> Svg.g []
 
 
 scoreUi :
@@ -1484,15 +1709,6 @@ lightRayUi color state =
             [ SvgA.points
                 lightRayInScreen
             , SvgA.stroke (Svg.Paint (color |> withAlpha 0.25))
-            , SvgA.strokeWidth (Svg.px 3)
-            , SvgA.fill (Svg.Paint (Color.rgba 0 0 0 0))
-            , SvgA.strokeLinejoin Svg.StrokeLinejoinRound
-            ]
-            []
-        , Svg.polyline
-            [ SvgA.points
-                lightRayInScreen
-            , SvgA.stroke (Svg.Paint (color |> withAlpha 0.25))
             , SvgA.strokeWidth (Svg.px (lightRayRadius |> Quantity.twice |> Pixels.toFloat))
             , SvgA.fill (Svg.Paint (Color.rgba 0 0 0 0))
             , SvgA.strokeLinejoin Svg.StrokeLinejoinRound
@@ -1518,6 +1734,43 @@ lightRayUi color state =
             []
         ]
             |> Svg.g []
+
+
+darknessBlobUi : DarknessBlob -> Svg event_
+darknessBlobUi =
+    Svg.Lazy.lazy
+        (\darknessBlob ->
+            let
+                r =
+                    darknessBlob |> Circle2d.radius
+
+                ( x, y ) =
+                    darknessBlob |> Circle2d.centerPoint |> Point2d.toTuple Pixels.toFloat
+            in
+            [ Svg.circle
+                [ SvgA.cx (Svg.px x)
+                , SvgA.cy (Svg.px y)
+                , SvgA.fill (Svg.Paint (Color.rgba 0 0 0 0.4))
+                , SvgA.r (Svg.px (r |> Pixels.toFloat))
+                ]
+                []
+            , Svg.circle
+                [ SvgA.cx (Svg.px x)
+                , SvgA.cy (Svg.px y)
+                , SvgA.fill (Svg.Paint (Color.rgba 0 0 0 0.09))
+                , SvgA.r (Svg.px (r |> Quantity.multiplyBy 2 |> Pixels.toFloat))
+                ]
+                []
+            , Svg.circle
+                [ SvgA.cx (Svg.px x)
+                , SvgA.cy (Svg.px y)
+                , SvgA.fill (Svg.Paint (Color.rgba 0 0 0 0.02))
+                , SvgA.r (Svg.px (r |> Quantity.multiplyBy 9 |> Pixels.toFloat))
+                ]
+                []
+            ]
+                |> Svg.g []
+        )
 
 
 audio : AudioData -> State -> Audio.Audio
@@ -1859,6 +2112,42 @@ pointsToSegments =
                         )
                         { segments = [], newStart = startPoint }
                     |> .segments
+
+
+untilLengthFrom lengthUpperLimit =
+    \points ->
+        case points of
+            [] ->
+                []
+
+            originPoint :: afterOriginPoint ->
+                afterOriginPoint
+                    |> List.Extra.stoppableFoldl
+                        (\newEnd soFar ->
+                            let
+                                newLengthSquared =
+                                    soFar.lengthSquared
+                                        + (Vector2d.from soFar.end newEnd
+                                            |> vector2dLengthSquared
+                                            |> Pixels.toFloat
+                                          )
+                            in
+                            if newLengthSquared < (lengthUpperLimit * lengthUpperLimit) then
+                                { lengthSquared = newLengthSquared
+                                , points = soFar.points |> (::) newEnd
+                                , end = newEnd
+                                }
+                                    |> List.Extra.Continue
+
+                            else
+                                soFar |> List.Extra.Stop
+                        )
+                        { lengthSquared = 0
+                        , points = []
+                        , end = originPoint
+                        }
+                    |> .points
+                    |> (::) originPoint
 
 
 dictUnionBy : (a -> a -> a) -> Dict comparableKey a -> Dict comparableKey a -> Dict comparableKey a
