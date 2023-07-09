@@ -839,8 +839,8 @@ plantSegmentRandom =
             (Random.map Angle.turns (Random.float 0.125 0.375))
         )
         plantColorRandom
-        (Random.Extra.frequency ( 0.95, Nothing |> Random.constant )
-            [ ( 0.05, Random.map Just blossomRandom ) ]
+        (Random.Extra.frequency ( 0.98, Nothing |> Random.constant )
+            [ ( 0.02, Random.map Just blossomRandom ) ]
         )
 
 
@@ -1412,7 +1412,7 @@ scoreUi =
 
 lightRayRadius : Quantity Float Pixels
 lightRayRadius =
-    Pixels.float 27
+    Pixels.float 22
 
 
 axisToEndPointsInWidth width axis =
@@ -1460,6 +1460,15 @@ lightRayUi color state =
                     |> List.map (Point2d.toTuple Pixels.toFloat)
         in
         [ Svg.polyline
+            [ SvgA.points
+                lightRayInScreen
+            , SvgA.stroke (Svg.Paint (color |> withAlpha 0.25))
+            , SvgA.strokeWidth (Svg.px 3)
+            , SvgA.fill (Svg.Paint (Color.rgba 0 0 0 0))
+            , SvgA.strokeLinejoin Svg.StrokeLinejoinRound
+            ]
+            []
+        , Svg.polyline
             [ SvgA.points
                 lightRayInScreen
             , SvgA.stroke (Svg.Paint (color |> withAlpha 0.25))
