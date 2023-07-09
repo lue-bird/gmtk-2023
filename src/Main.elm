@@ -549,8 +549,8 @@ gameReactTo event =
                             state.randomSeed
 
                     mirrors =
-                        consJust state.blossomSnappedToMouse
-                            state.freeBlossoms
+                        -- consJust state.blossomSnappedToMouse
+                        state.freeBlossoms
                             |> List.map .point
 
                     lightRaySegments =
@@ -562,7 +562,7 @@ gameReactTo event =
                                         , source = lightRay
                                         , windowSize = state.windowSize
                                         }
-                                        |> untilLengthFrom 1760
+                                        -- |> untilLengthFrom 1760
                                         |> pointsToSegments
                                 )
 
@@ -575,7 +575,7 @@ gameReactTo event =
                                         , source = lightRay
                                         , windowSize = state.windowSize
                                         }
-                                        |> untilLengthFrom 1760
+                                        -- |> untilLengthFrom 1760
                                         |> pointsToSegments
                                 )
 
@@ -1703,22 +1703,14 @@ lightRayUi color state =
                             state.freeBlossoms
                             |> List.map (\freeBlossom -> freeBlossom.point)
                     }
+                    -- |> untilLengthFrom 1780
                     |> List.map (Point2d.toTuple Pixels.toFloat)
         in
         [ Svg.polyline
             [ SvgA.points
                 lightRayInScreen
-            , SvgA.stroke (Svg.Paint (color |> withAlpha 0.25))
+            , SvgA.stroke (Svg.Paint (color |> withAlpha 0.15))
             , SvgA.strokeWidth (Svg.px (lightRayRadius |> Quantity.twice |> Pixels.toFloat))
-            , SvgA.fill (Svg.Paint (Color.rgba 0 0 0 0))
-            , SvgA.strokeLinejoin Svg.StrokeLinejoinRound
-            ]
-            []
-        , Svg.polyline
-            [ SvgA.points
-                lightRayInScreen
-            , SvgA.stroke (Svg.Paint (color |> withAlpha 0.09))
-            , SvgA.strokeWidth (Svg.px (lightRayRadius |> Quantity.multiplyBy 5 |> Pixels.toFloat))
             , SvgA.fill (Svg.Paint (Color.rgba 0 0 0 0))
             , SvgA.strokeLinejoin Svg.StrokeLinejoinRound
             ]
@@ -1757,15 +1749,8 @@ darknessBlobUi =
             , Svg.circle
                 [ SvgA.cx (Svg.px x)
                 , SvgA.cy (Svg.px y)
-                , SvgA.fill (Svg.Paint (Color.rgba 0 0 0 0.09))
-                , SvgA.r (Svg.px (r |> Quantity.multiplyBy 2 |> Pixels.toFloat))
-                ]
-                []
-            , Svg.circle
-                [ SvgA.cx (Svg.px x)
-                , SvgA.cy (Svg.px y)
-                , SvgA.fill (Svg.Paint (Color.rgba 0 0 0 0.02))
-                , SvgA.r (Svg.px (r |> Quantity.multiplyBy 9 |> Pixels.toFloat))
+                , SvgA.fill (Svg.Paint (Color.rgba 0 0 0 0.018))
+                , SvgA.r (Svg.px (r |> Quantity.multiplyBy 3 |> Pixels.toFloat))
                 ]
                 []
             ]
@@ -2140,13 +2125,14 @@ untilLengthFrom lengthUpperLimit =
                                     |> List.Extra.Continue
 
                             else
-                                soFar |> List.Extra.Stop
+                                { soFar | points = soFar.points |> (::) newEnd } |> List.Extra.Stop
                         )
                         { lengthSquared = 0
                         , points = []
                         , end = originPoint
                         }
                     |> .points
+                    |> List.reverse
                     |> (::) originPoint
 
 
