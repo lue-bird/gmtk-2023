@@ -1254,7 +1254,11 @@ menuUi =
             , Ui.centerX
             , Ui.centerY
             ]
-            [ Ui.text "diary"
+            [ Ui.text "d#ia#ry"
+                |> Ui.el
+                    [ UiFont.size 50
+                    , UiFont.family [ UiFont.monospace ]
+                    ]
             , Ui.row
                 [ Ui.spacing 5
                 , Ui.centerX
@@ -1277,7 +1281,7 @@ menuUi =
                                         (\week ->
                                             UiInput.button
                                                 [ Ui.paddingXY 50 30
-                                                , UiBackground.color (Ui.rgb 0 0 0)
+                                                , UiBackground.color (Ui.rgba 1 1 1 0.02)
                                                 , UiBorder.rounded 100
                                                 , Ui.width Ui.fill
                                                 ]
