@@ -20,5 +20,4 @@ serve
 
 ## TODO
 
-  - TODO grow the plant when hit by light
-  - TODO spawn light rays coming from the side
+  - TODO diffuse light after a while and don't let affect growth infinitely

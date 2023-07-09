@@ -9,6 +9,7 @@ import Browser.Events
 import Bytes
 import Circle2d exposing (Circle2d)
 import Color exposing (Color)
+import Dict exposing (Dict)
 import Direction2d exposing (Direction2d)
 import Duration exposing (Duration, Seconds)
 import Element as Ui
@@ -528,84 +529,100 @@ gameReactTo event =
                                     , newDarknessRay = newDarknessRay
                                     }
                                 )
-                                plantProgressRandom
+                                (state.plant |> plantProgress { height = 0, basePoint = Point2d.origin })
                                 (newRayRandom state.lightRays)
                                 (newRayRandom state.darknessRays)
                             )
                             state.randomSeed
 
-                    plantProgressRandom =
-                        Random.andThen
-                            (\shouldGrowLeaves ->
-                                if shouldGrowLeaves then
-                                    state.plant |> plantGrowLeaf
+                    lightRaySegments =
+                        state.lightRays
+                            |> List.concatMap
+                                (\lightRay ->
+                                    reflect
+                                        { mirrors = state.freeBlossoms |> List.map .point
+                                        , source = lightRay
+                                        , windowSize = state.windowSize
+                                        }
+                                        |> pointsToSegments
+                                )
 
-                                else
-                                    state.plant |> Random.constant
+                    plantWidthByHeight : Dict Int Int
+                    plantWidthByHeight =
+                        state.plant
+                            |> computePlantWidthByHeightFrom 1
+                            |> Dict.insert 0 1
+
+                    computePlantWidthByHeightFrom currentHeight =
+                        \plant ->
+                            plant
+                                |> Tree.children
+                                |> List.map
+                                    (\sub ->
+                                        sub |> computePlantWidthByHeightFrom (currentHeight + 1)
+                                    )
+                                |> List.foldl (\dict soFar -> dictUnionBy (+) soFar dict) Dict.empty
+                                |> Dict.insert currentHeight (plant |> Tree.children |> List.length)
+
+                    plantProgress :
+                        { basePoint : Point2d Pixels Float
+                        , height : Int
+                        }
+                        -> Plant
+                        -> Random.Generator Plant
+                    plantProgress current plant =
+                        -- TODO randomly remove when darkness rays are hit
+                        let
+                            lightProximity =
+                                lightRaySegments
+                                    |> List.map
+                                        (\lightRay ->
+                                            let
+                                                closest =
+                                                    onLineSegment2dClosestTo current.basePoint lightRay
+                                            in
+                                            1
+                                                / (max equalLightEffectZone (closest.distance |> Pixels.toFloat) ^ 2)
+                                        )
+                                    |> List.sum
+
+                            branchingPreference =
+                                case plantWidthByHeight |> Dict.get current.height of
+                                    Just 1 ->
+                                        1
+
+                                    Just 2 ->
+                                        0.2
+
+                                    _ ->
+                                        0.02
+
+                            endPoint =
+                                current.basePoint |> Point2d.translateBy (plant |> Tree.label |> .orientation)
+                        in
+                        Random.map2
+                            (\newSub subs ->
+                                Tree.tree (plant |> Tree.label)
+                                    (subs |> consJust (Maybe.map Tree.singleton newSub))
                             )
-                            (Random.weighted
-                                ( sinceLastTick |> Duration.inSeconds, True )
-                                [ ( 0.06, False ) ]
+                            (if (plantWidthByHeight |> Dict.get (current.height + 1) |> Maybe.withDefault 0) >= 10 then
+                                Random.constant Nothing
+
+                             else
+                                Random.Extra.frequency
+                                    ( 0.002, Random.constant Nothing )
+                                    [ ( lightProximity * branchingPreference
+                                      , Random.map Just plantSegmentRandom
+                                      )
+                                    ]
                             )
-
-                    plantGrowLeaf : Plant -> Random.Generator Plant
-                    plantGrowLeaf plant =
-                        -- TODO with the parent's absolute location. If hit light mostly only then add random piece
-                        Random.map
-                            (\subs ->
-                                Tree.tree (plant |> Tree.label) subs
-                            )
-                            (case plant |> Tree.children of
-                                [] ->
-                                    Random.map (\only -> [ Tree.singleton only ]) plantSegmentRandom
-
-                                [ onlySub ] ->
-                                    Random.andThen
-                                        (\shouldAddBranch ->
-                                            if shouldAddBranch then
-                                                Random.map (\new -> [ onlySub, Tree.singleton new ]) plantSegmentRandom
-
-                                            else
-                                                Random.map List.singleton (plantGrowLeaf onlySub)
-                                        )
-                                        (Random.weighted
-                                            ( 0.024 {- (1 / ((onlySub |> Tree.count |> toFloat) ^ 2)) * 0.5 -}
-                                            , True
-                                            )
-                                            [ ( 1, False ) ]
-                                        )
-
-                                sub0 :: sub1Up ->
-                                    Random.andThen
-                                        (\index ->
-                                            (sub0 :: sub1Up)
-                                                |> List.indexedMap
-                                                    (\subIndex sub ->
-                                                        if subIndex == index then
-                                                            plantGrowLeaf sub
-
-                                                        else
-                                                            sub |> Random.constant
-                                                    )
-                                                |> Random.Extra.sequence
-                                        )
-                                        (let
-                                            weighted i =
-                                                ( {- ((sub0 :: sub1Up)
-                                                       |> List.Extra.getAt i
-                                                       |> Maybe.withDefault sub0
-                                                       |> Tree.count
-                                                       |> toFloat
-                                                     )
-                                                  -}
-                                                  10
-                                                    * 2.5
-                                                , i
-                                                )
-                                         in
-                                         Random.weighted (0 |> weighted)
-                                            (List.range 1 (sub1Up |> List.length) |> List.map weighted)
-                                        )
+                            (plant
+                                |> Tree.children
+                                |> List.map
+                                    (\sub ->
+                                        plantProgress { basePoint = endPoint, height = current.height + 1 } sub
+                                    )
+                                |> Random.Extra.sequence
                             )
 
                     newRayRandom existingRays =
@@ -627,8 +644,7 @@ gameReactTo event =
                                 else
                                     Random.constant Nothing
 
-                    -- TODO add sounds for blossoms
-                    -- TODO move camera with arrow keys
+                    -- ? TODO add sounds for blossoms
                 in
                 Reaction.to
                     ({ state
@@ -705,6 +721,11 @@ subscriptions =
                 ]
                     |> Sub.batch
                     |> Sub.map (Game >> Specific)
+
+
+equalLightEffectZone : Float
+equalLightEffectZone =
+    1.5 * (lightRayRadius |> Pixels.toFloat)
 
 
 port audioPortToJS : Json.Encode.Value -> Cmd msg_
@@ -839,8 +860,8 @@ plantSegmentRandom =
             (Random.map Angle.turns (Random.float 0.125 0.375))
         )
         plantColorRandom
-        (Random.Extra.frequency ( 0.98, Nothing |> Random.constant )
-            [ ( 0.02, Random.map Just blossomRandom ) ]
+        (Random.Extra.frequency ( 0.991, Nothing |> Random.constant )
+            [ ( 0.009, Random.map Just blossomRandom ) ]
         )
 
 
@@ -1412,7 +1433,7 @@ scoreUi =
 
 lightRayRadius : Quantity Float Pixels
 lightRayRadius =
-    Pixels.float 22
+    Pixels.float 26
 
 
 axisToEndPointsInWidth width axis =
@@ -1507,26 +1528,15 @@ audio audioData =
                 Audio.silence
 
             Game gameState ->
+                -- loop
                 audioWith state.shared.audio.music
                     (\music ->
-                        let
-                            musicLength =
-                                music |> Audio.length audioData
-
-                            -- loop
-                            startTime =
-                                Duration.addTo
-                                    gameState.initialTime
-                                    (musicLength |> Quantity.multiplyBy (alreadyCompletedLoops |> toFloat))
-
-                            alreadyCompletedLoops =
-                                (Duration.from gameState.initialTime gameState.lastTick
-                                    |> Duration.inMilliseconds
-                                    |> floor
-                                )
-                                    // (musicLength |> Duration.inMilliseconds |> floor)
-                        in
-                        Audio.audio music startTime
+                        music
+                            |> audioLoop
+                                { initialTime = gameState.initialTime
+                                , lastTick = gameState.lastTick
+                                , audioData = audioData
+                                }
                     )
                     :: (audioKinds
                             |> List.map
@@ -1544,6 +1554,28 @@ audio audioData =
                     |> Audio.group
 
 
+audioLoop { audioData, initialTime, lastTick } =
+    \audio_ ->
+        let
+            audioLength =
+                audio_ |> Audio.length audioData
+
+            startTime =
+                Duration.addTo
+                    initialTime
+                    (audioLength |> Quantity.multiplyBy (alreadyCompletedLoops |> toFloat))
+
+            alreadyCompletedLoops =
+                (Duration.from initialTime lastTick
+                    |> Duration.inMilliseconds
+                    |> floor
+                )
+                    // (audioLength |> Duration.inMilliseconds |> floor)
+        in
+        Audio.audio audio_ startTime
+
+
+audioWith : Result error value -> (value -> Audio.Audio) -> Audio.Audio
 audioWith source with =
     case source of
         Err _ ->
@@ -1590,6 +1622,7 @@ consJust maybeHead list =
             head :: list
 
 
+halfLineToAxis : HalfLine -> Axis2d Pixels Float
 halfLineToAxis =
     \vector ->
         Axis2d.through vector.originPoint vector.direction
@@ -1805,3 +1838,35 @@ vector2dLengthSquared =
             |> Quantity.squared
             |> Quantity.plus (vector2d |> Vector2d.yComponent |> Quantity.squared)
             |> Quantity.over Pixels.pixel
+
+
+pointsToSegments : List (Point2d units coordinates) -> List (LineSegment2d units coordinates)
+pointsToSegments =
+    \points ->
+        case points of
+            [] ->
+                []
+
+            startPoint :: afterStartPoint ->
+                afterStartPoint
+                    |> List.foldl
+                        (\point soFar ->
+                            { segments =
+                                soFar.segments
+                                    |> (::) (LineSegment2d.from soFar.newStart point)
+                            , newStart = point
+                            }
+                        )
+                        { segments = [], newStart = startPoint }
+                    |> .segments
+
+
+dictUnionBy : (a -> a -> a) -> Dict comparableKey a -> Dict comparableKey a -> Dict comparableKey a
+dictUnionBy combineAB aDict bDict =
+    Dict.merge
+        (\k a soFar -> soFar |> Dict.insert k a)
+        (\k a b soFar -> soFar |> Dict.insert k (combineAB a b))
+        (\k b soFar -> soFar |> Dict.insert k b)
+        aDict
+        bDict
+        Dict.empty
