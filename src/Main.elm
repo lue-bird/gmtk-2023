@@ -125,6 +125,7 @@ type alias GameState =
         , blossomSnappedToMouse : Maybe FreeBlossom
         , freeBlossoms : List FreeBlossom
         , lightRays : List LightRay
+        , darknessRays : List LightRay
         , camera : Frame2d Pixels Float { defines : Float }
         , scrollYSpeed : Quantity Float (Rate Pixels Seconds)
         , highest : Quantity Float Pixels
@@ -315,6 +316,13 @@ initGame =
             [ { axis =
                     { originPoint = Point2d.fromRecord Pixels.float { x = -1000, y = 500 }
                     , direction = Direction2d.fromAngle (Angle.turns -0.02)
+                    }
+              }
+            ]
+        , darknessRays =
+            [ { axis =
+                    { originPoint = Point2d.fromRecord Pixels.float { x = 1000, y = 1200 }
+                    , direction = Direction2d.fromAngle (Angle.turns 0.48)
                     }
               }
             ]
@@ -511,37 +519,34 @@ gameReactTo event =
                     sinceLastTick =
                         Duration.from state.lastTick newSimulationTime
 
-                    ( plantProgressed, newSeed ) =
+                    ( generated, newSeed ) =
                         Random.step
-                            (Random.andThen
-                                (\shouldGrowLeaves ->
-                                    if shouldGrowLeaves then
-                                        state.plant |> plantGrowLeaf
-
-                                    else
-                                        state.plant |> Random.constant
+                            (Random.map3
+                                (\plantProgressed newLightRay newDarknessRay ->
+                                    { plantProgressed = plantProgressed
+                                    , newLightRay = newLightRay
+                                    , newDarknessRay = newDarknessRay
+                                    }
                                 )
-                                (Random.weighted
-                                    ( sinceLastTick |> Duration.inSeconds, True )
-                                    [ ( 0.06, False ) ]
-                                )
-                                |> Random.andThen
-                                    (\plantGrown ->
-                                        Random.andThen
-                                            (\shouldAddBlossom ->
-                                                if shouldAddBlossom then
-                                                    plantGrown |> plantGrowBlossoms
-
-                                                else
-                                                    plantGrown |> Random.constant
-                                            )
-                                            (Random.weighted
-                                                ( sinceLastTick |> Duration.inSeconds, True )
-                                                [ ( 0.06, False ) ]
-                                            )
-                                    )
+                                plantProgressRandom
+                                (newRayRandom state.lightRays)
+                                (newRayRandom state.darknessRays)
                             )
                             state.randomSeed
+
+                    plantProgressRandom =
+                        Random.andThen
+                            (\shouldGrowLeaves ->
+                                if shouldGrowLeaves then
+                                    state.plant |> plantGrowLeaf
+
+                                else
+                                    state.plant |> Random.constant
+                            )
+                            (Random.weighted
+                                ( sinceLastTick |> Duration.inSeconds, True )
+                                [ ( 0.06, False ) ]
+                            )
 
                     plantGrowLeaf : Plant -> Random.Generator Plant
                     plantGrowLeaf plant =
@@ -603,28 +608,39 @@ gameReactTo event =
                                         )
                             )
 
-                    plantGrowBlossoms plant =
-                        Random.map2
-                            (\blossom subs ->
-                                Tree.tree (plant |> Tree.label |> (\r -> { r | blossom = r.blossom |> onJust blossom })) subs
-                            )
-                            (Random.Extra.frequency ( 0.999, Nothing |> Random.constant )
-                                [ ( 0.00025, Random.map Just blossomRandom ) ]
-                            )
-                            ((plant |> Tree.children)
-                                |> Random.Extra.traverse plantGrowBlossoms
-                            )
+                    newRayRandom existingRays =
+                        case existingRays of
+                            [] ->
+                                -- shouldn't happen
+                                Random.constant Nothing
+
+                            highestLightRay :: _ ->
+                                if
+                                    (highestLightRay.axis.originPoint |> Point2d.yCoordinate)
+                                        |> Quantity.lessThan
+                                            ((state.camera |> Frame2d.originPoint |> Point2d.yCoordinate)
+                                                |> Quantity.plus (Pixels.float state.windowSize.height)
+                                            )
+                                then
+                                    Random.map Just (lightRayRandomAbove (highestLightRay.axis.originPoint |> Point2d.yCoordinate |> Pixels.toFloat) state)
+
+                                else
+                                    Random.constant Nothing
 
                     -- TODO add sounds for blossoms
                     -- TODO move camera with arrow keys
                 in
                 Reaction.to
                     ({ state
-                        | plant = plantProgressed
+                        | plant = generated.plantProgressed
                         , highest =
                             Quantity.max
                                 state.highest
-                                (plantProgressed |> plantHeight)
+                                (generated.plantProgressed |> plantHeight)
+                        , lightRays =
+                            state.lightRays |> consJust generated.newLightRay
+                        , darknessRays =
+                            state.darknessRays |> consJust generated.newDarknessRay
                         , scrollYSpeed =
                             state.scrollYSpeed
                                 |> (if List.member Key.ArrowUp state.keysPressed || List.member Key.W state.keysPressed then
@@ -812,7 +828,7 @@ separateBlossomAt path =
 
 plantSegmentRandom : Random.Generator PlantSegment
 plantSegmentRandom =
-    Random.map2 (\orientation color -> { orientation = orientation, color = color, blossom = Nothing })
+    Random.map3 (\orientation color blossom -> { orientation = orientation, color = color, blossom = blossom })
         (Random.map2
             (\length angleInTurns ->
                 Vector2d.withLength
@@ -823,6 +839,9 @@ plantSegmentRandom =
             (Random.map Angle.turns (Random.float 0.125 0.375))
         )
         plantColorRandom
+        (Random.Extra.frequency ( 0.95, Nothing |> Random.constant )
+            [ ( 0.05, Random.map Just blossomRandom ) ]
+        )
 
 
 plantColorRandom : Random.Generator Color
@@ -859,6 +878,52 @@ blossomColorRandom =
                 in
                 List.any isDifferentEnoughFromAverage [ c.red, c.blue, c.green ]
             )
+
+
+lightRayRandomAbove :
+    Float
+    -> { state_ | windowSize : { width : Float, height : Float } }
+    -> Random.Generator LightRay
+lightRayRandomAbove currentHighestLightY state =
+    let
+        distanceFactor =
+            currentHighestLightY ^ 0.35
+
+        yDistanceRandom =
+            Random.float (38 * distanceFactor) (43 * distanceFactor)
+
+        lightRayFromLeftRandom : Random.Generator LightRay
+        lightRayFromLeftRandom =
+            Random.map2
+                (\angle y ->
+                    { axis =
+                        { originPoint =
+                            Point2d.fromRecord Pixels.float
+                                { x = -state.windowSize.width / 2 - 50, y = currentHighestLightY + y }
+                        , direction = Direction2d.fromAngle (Angle.turns angle)
+                        }
+                    }
+                )
+                (Random.float -0.02 0.1)
+                yDistanceRandom
+
+        lightRayFromRightRandom : Random.Generator LightRay
+        lightRayFromRightRandom =
+            Random.map2
+                (\angle y ->
+                    { axis =
+                        { originPoint =
+                            Point2d.fromRecord Pixels.float
+                                { x = state.windowSize.width / 2 + 50, y = currentHighestLightY + y }
+                        , direction = Direction2d.fromAngle (Angle.turns angle)
+                        }
+                    }
+                )
+                (Random.float 0.4 0.52)
+                yDistanceRandom
+    in
+    -- there must be a function I'm missing
+    Random.Extra.frequency ( 1, lightRayFromLeftRandom ) [ ( 1, lightRayFromRightRandom ) ]
 
 
 uiDocument : State -> Browser.Document Event
@@ -938,6 +1003,7 @@ worldUi :
     { state_
         | plant : Plant
         , lightRays : List LightRay
+        , darknessRays : List LightRay
         , blossomSnappedToMouse : Maybe FreeBlossom
         , freeBlossoms : List FreeBlossom
         , camera : Frame2d Pixels Float { defines : Float }
@@ -951,7 +1017,8 @@ worldUi =
                 (state.camera |> cameraToTransform)
             ]
             (groundUi
-                :: (state.lightRays |> List.map (lightRayUi state))
+                :: (state.lightRays |> List.map (lightRayUi (Color.rgb 1 0.9 0.8) state))
+                ++ (state.darknessRays |> List.map (lightRayUi (Color.rgb 0 0 0) state))
                 ++ [ state.plant |> plantWithoutBlossomsUi, state.plant |> plantBlossomsOnlyUi ]
                 ++ (state.freeBlossoms
                         |> List.indexedMap
@@ -1369,14 +1436,16 @@ axisToEndPointsInWidth width axis =
 
 
 lightRayUi :
-    { state_
-        | windowSize : { width : Float, height : Float }
-        , freeBlossoms : List FreeBlossom
-        , blossomSnappedToMouse : Maybe FreeBlossom
-    }
+    Color
+    ->
+        { state_
+            | windowSize : { width : Float, height : Float }
+            , freeBlossoms : List FreeBlossom
+            , blossomSnappedToMouse : Maybe FreeBlossom
+        }
     -> LightRay
     -> Svg event_
-lightRayUi state =
+lightRayUi color state =
     \lightRay ->
         let
             lightRayInScreen =
@@ -1393,7 +1462,7 @@ lightRayUi state =
         [ Svg.polyline
             [ SvgA.points
                 lightRayInScreen
-            , SvgA.stroke (Svg.Paint (Color.rgba 1 0.9 0.8 0.25))
+            , SvgA.stroke (Svg.Paint (color |> withAlpha 0.25))
             , SvgA.strokeWidth (Svg.px (lightRayRadius |> Quantity.twice |> Pixels.toFloat))
             , SvgA.fill (Svg.Paint (Color.rgba 0 0 0 0))
             , SvgA.strokeLinejoin Svg.StrokeLinejoinRound
@@ -1402,7 +1471,7 @@ lightRayUi state =
         , Svg.polyline
             [ SvgA.points
                 lightRayInScreen
-            , SvgA.stroke (Svg.Paint (Color.rgba 1 0.9 0.8 0.1))
+            , SvgA.stroke (Svg.Paint (color |> withAlpha 0.09))
             , SvgA.strokeWidth (Svg.px (lightRayRadius |> Quantity.multiplyBy 5 |> Pixels.toFloat))
             , SvgA.fill (Svg.Paint (Color.rgba 0 0 0 0))
             , SvgA.strokeLinejoin Svg.StrokeLinejoinRound
@@ -1411,7 +1480,7 @@ lightRayUi state =
         , Svg.polyline
             [ SvgA.points
                 lightRayInScreen
-            , SvgA.stroke (Svg.Paint (Color.rgba 1 0.9 0.8 0.02))
+            , SvgA.stroke (Svg.Paint (color |> withAlpha 0.02))
             , SvgA.strokeWidth (Svg.px (lightRayRadius |> Quantity.multiplyBy 15 |> Pixels.toFloat))
             , SvgA.fill (Svg.Paint (Color.rgba 0 0 0 0))
             , SvgA.strokeLinejoin Svg.StrokeLinejoinRound
