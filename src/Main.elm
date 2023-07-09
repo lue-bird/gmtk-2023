@@ -1245,13 +1245,13 @@ worldUi =
                 :: (state.lightRays
                         |> List.map
                             (\lightRay ->
-                                lightRay |> lightRayUi (Color.rgb 1 0.9 0.8) state
+                                lightRay |> lightRayUi state
                             )
                    )
                 ++ (state.darknessRays
                         |> List.map
                             (\darknessRay ->
-                                darknessRay |> lightRayUi (Color.rgb 0 0 0) state
+                                darknessRay |> darknessRayUi state
                             )
                    )
                 ++ (state.darknessBlobs |> List.map darknessBlobUi)
@@ -1471,7 +1471,7 @@ plantSegmentUi =
                 , SvgA.x2 (Svg.px x2)
                 , SvgA.y2 (Svg.px y2)
                 , SvgA.stroke (Svg.Paint label.color)
-                , SvgA.strokeWidth (Svg.px 9)
+                , SvgA.strokeWidth (Svg.px 30)
                 , SvgA.strokeLinecap Svg.StrokeLinecapRound
                 ]
                 []
@@ -1681,17 +1681,20 @@ axisToEndPointsInWidth width axis =
     }
 
 
+lightRayColor : Color
+lightRayColor =
+    Color.rgb 1 0.9 0.8
+
+
 lightRayUi :
-    Color
-    ->
-        { state_
-            | windowSize : { width : Float, height : Float }
-            , freeBlossoms : List FreeBlossom
-            , blossomSnappedToMouse : Maybe FreeBlossom
-        }
+    { state_
+        | windowSize : { width : Float, height : Float }
+        , freeBlossoms : List FreeBlossom
+        , blossomSnappedToMouse : Maybe FreeBlossom
+    }
     -> LightRay
     -> Svg event_
-lightRayUi color state =
+lightRayUi state =
     \lightRay ->
         let
             lightRayInScreen =
@@ -1709,7 +1712,7 @@ lightRayUi color state =
         [ Svg.polyline
             [ SvgA.points
                 lightRayInScreen
-            , SvgA.stroke (Svg.Paint (color |> withAlpha 0.15))
+            , SvgA.stroke (Svg.Paint (lightRayColor |> withAlpha 0.15))
             , SvgA.strokeWidth (Svg.px (lightRayRadius |> Quantity.twice |> Pixels.toFloat))
             , SvgA.fill (Svg.Paint (Color.rgba 0 0 0 0))
             , SvgA.strokeLinejoin Svg.StrokeLinejoinRound
@@ -1718,10 +1721,47 @@ lightRayUi color state =
         , Svg.polyline
             [ SvgA.points
                 lightRayInScreen
-            , SvgA.stroke (Svg.Paint (color |> withAlpha 0.02))
+            , SvgA.stroke (Svg.Paint (lightRayColor |> withAlpha 0.02))
             , SvgA.strokeWidth (Svg.px (lightRayRadius |> Quantity.multiplyBy 15 |> Pixels.toFloat))
             , SvgA.fill (Svg.Paint (Color.rgba 0 0 0 0))
             , SvgA.strokeLinejoin Svg.StrokeLinejoinRound
+            ]
+            []
+        ]
+            |> Svg.g []
+
+
+darknessRayUi :
+    { state_
+        | windowSize : { width : Float, height : Float }
+        , freeBlossoms : List FreeBlossom
+        , blossomSnappedToMouse : Maybe FreeBlossom
+    }
+    -> LightRay
+    -> Svg event_
+darknessRayUi state =
+    \lightRay ->
+        let
+            lightRayInScreen =
+                reflect
+                    { windowSize = state.windowSize
+                    , source = lightRay
+                    , mirrors =
+                        consJust state.blossomSnappedToMouse
+                            state.freeBlossoms
+                            |> List.map (\freeBlossom -> freeBlossom.point)
+                    }
+                    -- |> untilLengthFrom 1780
+                    |> List.map (Point2d.toTuple Pixels.toFloat)
+        in
+        [ Svg.polyline
+            [ SvgA.points
+                lightRayInScreen
+            , SvgA.stroke (Svg.Paint (Color.rgb 0 0 0))
+            , SvgA.strokeWidth (Svg.px (lightRayRadius |> Quantity.twice |> Pixels.toFloat))
+            , SvgA.fill (Svg.Paint (Color.rgba 0 0 0 0))
+            , SvgA.strokeLinejoin Svg.StrokeLinejoinRound
+            , SvgA.filter (Svg.Filter "url(#fog)")
             ]
             []
         ]
@@ -1742,15 +1782,9 @@ darknessBlobUi =
             [ Svg.circle
                 [ SvgA.cx (Svg.px x)
                 , SvgA.cy (Svg.px y)
-                , SvgA.fill (Svg.Paint (Color.rgba 0 0 0 0.4))
+                , SvgA.fill (Svg.Paint (Color.rgb 0 0 0))
                 , SvgA.r (Svg.px (r |> Pixels.toFloat))
-                ]
-                []
-            , Svg.circle
-                [ SvgA.cx (Svg.px x)
-                , SvgA.cy (Svg.px y)
-                , SvgA.fill (Svg.Paint (Color.rgba 0 0 0 0.018))
-                , SvgA.r (Svg.px (r |> Quantity.multiplyBy 3 |> Pixels.toFloat))
+                , SvgA.filter (Svg.Filter "url(#fog)")
                 ]
                 []
             ]
