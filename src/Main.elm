@@ -1,7 +1,7 @@
-module Main exposing (main)
+port module Main exposing (main)
 
 import Angle exposing (Angle)
-import Audio
+import Audio exposing (AudioData)
 import Axis2d exposing (Axis2d)
 import Browser
 import Browser.Dom
@@ -23,12 +23,11 @@ import Frame2d exposing (Frame2d)
 import Html exposing (Html)
 import Html.Events
 import Json.Decode
+import Json.Encode
 import Key
 import LineSegment2d exposing (LineSegment2d)
 import List.Extra
-import Physics
 import Pixels exposing (Pixels)
-import PkgPorts
 import Point2d exposing (Point2d)
 import Quantity exposing (Quantity, Rate)
 import Random
@@ -132,6 +131,7 @@ type alias GameState =
         , keysPressed : List Key.Key
         , randomSeed : Random.Seed
         , lastTick : Time.Posix
+        , initialTime : Time.Posix
         }
 
 
@@ -194,10 +194,10 @@ main =
             \_ -> subscriptions
         , view =
             \_ -> uiDocument
-        , audio = \_ -> audio
+        , audio = audio
         , audioPort =
-            { toJS = PkgPorts.ports.audioPortToJS
-            , fromJS = PkgPorts.ports.audioPortFromJS
+            { toJS = audioPortToJS
+            , fromJS = audioPortFromJS
             }
         }
 
@@ -307,6 +307,9 @@ initGame =
         , randomSeed =
             -- dummy
             Random.initialSeed 1635127483
+        , initialTime =
+            -- dummy
+            Time.millisToPosix -1
         , lastTick =
             -- dummy
             Time.millisToPosix -1
@@ -471,7 +474,10 @@ gameReactTo event =
         InitialTimeReceived initialTime ->
             \state ->
                 Reaction.to
-                    ({ state | lastTick = initialTime }
+                    ({ state
+                        | initialTime = initialTime
+                        , lastTick = initialTime
+                     }
                         |> Game
                     )
 
@@ -659,6 +665,12 @@ subscriptions =
                 ]
                     |> Sub.batch
                     |> Sub.map (Game >> Specific)
+
+
+port audioPortToJS : Json.Encode.Value -> Cmd msg_
+
+
+port audioPortFromJS : (Json.Decode.Value -> msg) -> Sub msg
 
 
 interpretEffect : Effect -> Reaction.EffectInterpretation Event
@@ -1385,29 +1397,58 @@ lightRayUi state =
             |> Svg.g []
 
 
-audio : State -> Audio.Audio
-audio =
+audio : AudioData -> State -> Audio.Audio
+audio audioData =
     \state ->
         case state.specific of
             Menu _ ->
                 Audio.silence
 
             Game gameState ->
-                audioKinds
-                    |> List.map
-                        (\audioKind ->
-                            case state.shared.audio |> accessAudioOfKind audioKind of
-                                Err _ ->
-                                    Audio.silence
+                audioWith state.shared.audio.music
+                    (\music ->
+                        let
+                            musicLength =
+                                music |> Audio.length audioData
 
-                                Ok loadedAudio ->
-                                    gameState.audioTimes
-                                        |> accessAudioOfKind audioKind
-                                        |> List.map
-                                            (\time -> Audio.audio loadedAudio time)
-                                        |> Audio.group
-                        )
+                            -- loop
+                            startTime =
+                                Duration.addTo
+                                    gameState.initialTime
+                                    (musicLength |> Quantity.multiplyBy (alreadyCompletedLoops |> toFloat))
+
+                            alreadyCompletedLoops =
+                                (Duration.from gameState.initialTime gameState.lastTick
+                                    |> Duration.inMilliseconds
+                                    |> floor
+                                )
+                                    // (musicLength |> Duration.inMilliseconds |> floor)
+                        in
+                        Audio.audio music startTime
+                    )
+                    :: (audioKinds
+                            |> List.map
+                                (\audioKind ->
+                                    audioWith (state.shared.audio |> accessAudioOfKind audioKind)
+                                        (\loadedAudio ->
+                                            gameState.audioTimes
+                                                |> accessAudioOfKind audioKind
+                                                |> List.map
+                                                    (\time -> Audio.audio loadedAudio time)
+                                                |> Audio.group
+                                        )
+                                )
+                       )
                     |> Audio.group
+
+
+audioWith source with =
+    case source of
+        Err _ ->
+            Audio.silence
+
+        Ok loadedAudio ->
+            with loadedAudio
 
 
 
