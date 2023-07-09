@@ -1250,26 +1250,59 @@ menuUi : MenuState -> Ui.Element MenuEvent
 menuUi =
     \state ->
         Ui.column
-            [ Ui.spacing 70
+            [ Ui.spacing 50
             , Ui.centerX
             , Ui.centerY
-            , UiFont.size 55
-            , UiFont.extraBold
             ]
-            [ UiInput.button
-                [ Ui.paddingXY 50 30
-                , UiBackground.color (Ui.rgb 0 0 0)
-                , UiBorder.rounded 1000
-                , Ui.width Ui.fill
+            [ Ui.text "diary"
+            , Ui.row
+                [ Ui.spacing 5
+                , Ui.centerX
+                , Ui.centerY
+                , UiFont.size 55
+                , UiFont.extraBold
                 ]
-                { onPress = GameStartClicked |> Just
-                , label =
-                    Ui.text "🌼"
-                        |> Ui.el
-                            [ Ui.centerX
-                            , Html.Attributes.style "transform" "scale(-1, -1)" |> Ui.htmlAttribute
-                            ]
-                }
+                (List.range 0 6
+                    |> List.map
+                        (\weekday ->
+                            Ui.column
+                                [ Ui.spacing 5
+                                , Ui.centerX
+                                , Ui.centerY
+                                , UiFont.size 55
+                                , UiFont.extraBold
+                                ]
+                                (List.range 0 3
+                                    |> List.map
+                                        (\week ->
+                                            UiInput.button
+                                                [ Ui.paddingXY 50 30
+                                                , UiBackground.color (Ui.rgb 0 0 0)
+                                                , UiBorder.rounded 100
+                                                , Ui.width Ui.fill
+                                                ]
+                                                { onPress = GameStartClicked |> Just
+                                                , label =
+                                                    Ui.text "🌼"
+                                                        |> Ui.el
+                                                            [ Ui.centerX
+                                                            , Html.Attributes.style "transform" "scale(-1, -1)" |> Ui.htmlAttribute
+                                                            , Ui.inFront
+                                                                (((1 + week) * (1 + weekday))
+                                                                    |> String.fromInt
+                                                                    |> Ui.text
+                                                                    |> Ui.el
+                                                                        [ Ui.moveDown 50
+                                                                        , Ui.moveRight 60
+                                                                        , UiFont.size 20
+                                                                        ]
+                                                                )
+                                                            ]
+                                                }
+                                        )
+                                )
+                        )
+                )
             ]
 
 
@@ -1770,7 +1803,7 @@ pointToTranslateTransform =
 
 backgroundColor : Color
 backgroundColor =
-    Color.rgb 0.03 0.05 0.2
+    Color.rgb 0.03 0.05 0.09
 
 
 backgroundUi : Svg event_
@@ -1793,15 +1826,15 @@ scoreUi =
         [ Svg.rect
             [ SvgA.fill (Svg.Paint (Color.rgba 0 0 0 0.5))
             , SvgA.width (Svg.percent 100)
-            , SvgA.height (Svg.percent 14)
+            , SvgA.height (Svg.percent 9)
             ]
             []
         , Svg.text_
             [ SvgA.x (Svg.percent 50)
-            , SvgA.y (Svg.percent 8)
-            , SvgA.fontSize (Svg.percent 300)
+            , SvgA.y (Svg.percent 6)
+            , SvgA.fontSize (Svg.percent 200)
             , SvgA.fontWeight Svg.FontWeightBolder
-            , SvgA.opacity (Svg.Opacity 0.5)
+            , SvgA.opacity (Svg.Opacity 0.3)
             , SvgA.textAnchor Svg.AnchorMiddle
             , SvgA.fontFamily [ "monospace" ]
             , SvgA.fill (Svg.Paint (Color.rgb 1 1 1))
